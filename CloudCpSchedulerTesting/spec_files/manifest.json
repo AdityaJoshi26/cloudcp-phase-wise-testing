@@ -1,0 +1,282 @@
+{
+  "schema": "cloudcp-scheduler-dataset-manifest/v1",
+  "generated_for": "CloudCp scheduler deterministic-enumeration validation",
+  "design_doc": "../deterministic_enumeration_datasets.md",
+  "generator": "../generate_dataset.py",
+  "data_root_default": "/bryck/cloudcp_sched_data",
+  "enumeration_model": {
+    "walker": "single-process BFS, collections.deque frontier, popleft",
+    "rule": "BFS drains a directory's OWN files before descending into subdirs; each dataset is a single nested chain (one size-tier per level), so tiers are enumerated strictly top-to-bottom L0 -> L1 -> ... -> L4.",
+    "why_deterministic": "Because every level holds exactly one homogeneous size-tier, the size-tier enumeration order is fixed BEFORE transfer and does not depend on os.scandir() intra-directory ordering. This makes the batch-builder's per-tier slotting and batch-closing behaviour predictable and assertable.",
+    "oracle": {
+      "file_level": "exact via source.index (enumeration order is the chain order L0..L4)",
+      "batch_level": "batches.created per tier = OPEN_BATCHES(tier) * R(tier); tiers with R=1 flush all open batches at finish() rather than streaming, so assert counts (batches.created) not wall-clock publish order for terminal single-block tiers.",
+      "block_definition": "one 'block' = BATCH_SIZE * OPEN_BATCHES files for a tier; num_files(level) = block * R(tier)."
+    }
+  },
+  "tiers": {
+    "ZERO":   { "size": "0",     "size_bytes": 0,          "content": "sparse", "prefix": "z-", "batch_size_M": 2000, "open_batches_K": 4, "files_per_block": 8000, "note": "zero-byte files; stresses count-based batch closing (TARGET_SIZE never triggers)." },
+    "TINY":   { "size": "16KB",  "size_bytes": 16384,      "content": "random", "prefix": "t-", "batch_size_M": 511,  "open_batches_K": 8, "files_per_block": 4088, "note": "16 KiB files; high file-count, low bytes; count-capped batches." },
+    "SMALL":  { "size": "2MB",   "size_bytes": 2097152,    "content": "random", "prefix": "s-", "batch_size_M": 317,  "open_batches_K": 8, "files_per_block": 2536, "note": "2 MiB files; balanced count/size pressure." },
+    "MEDIUM": { "size": "100MB", "size_bytes": 104857600,  "content": "sparse", "prefix": "m-", "batch_size_M": 50,   "open_batches_K": 8, "files_per_block": 400,  "note": "100 MiB files; TARGET_SIZE_MB closes batches before BATCH_SIZE; sparse keeps disk footprint low." },
+    "LARGE":  { "size": "1GB",   "size_bytes": 1073741824, "content": "sparse", "prefix": "l-", "batch_size_M": 5,    "open_batches_K": 8, "files_per_block": 40,   "note": "1 GiB files; size-capped batches close almost immediately; sparse keeps disk footprint low." }
+  },
+  "profiles": {
+    "ORDER": {
+      "purpose": "Small, fast-to-materialise datasets that isolate the ORDER of size-tier enumeration. R kept low so each tier still yields multiple batches while total logical size stays modest (~89 GiB per dataset).",
+      "blocks_per_tier_R": { "ZERO": 2, "TINY": 2, "SMALL": 2, "MEDIUM": 1, "LARGE": 1 },
+      "files_per_level":   { "ZERO": 16000, "TINY": 8176, "SMALL": 5072, "MEDIUM": 400, "LARGE": 40 },
+      "batches_per_level": { "ZERO": 8, "TINY": 16, "SMALL": 16, "MEDIUM": 8, "LARGE": 8 }
+    },
+    "DEEP": {
+      "purpose": "Large backlog datasets that build a deep per-tier queue (many blocks) to exercise sustained scheduling and back-pressure under a known enumeration order (~285 GiB per dataset).",
+      "blocks_per_tier_R": { "ZERO": 100, "TINY": 50, "SMALL": 25, "MEDIUM": 2, "LARGE": 2 },
+      "files_per_level":   { "ZERO": 800000, "TINY": 204400, "SMALL": 63400, "MEDIUM": 800, "LARGE": 80 },
+      "batches_per_level": { "ZERO": 400, "TINY": 400, "SMALL": 200, "MEDIUM": 16, "LARGE": 16 }
+    }
+  },
+  "level_naming": "L<k>_<TIER>.yaml where k is the BFS depth (0 = chain root). Directory chain: <id>/, <id>/L1/, <id>/L1/L2/, <id>/L1/L2/L3/, <id>/L1/L2/L3/L4/.",
+  "seed_rule": "seed(level) = 1000 * dataset_number + level_index",
+  "datasets": [
+    {
+      "id": "SCH-ORD-01",
+      "number": 1,
+      "profile": "ORDER",
+      "ordering_code": "ZTSML",
+      "enumeration_order": ["ZERO", "TINY", "SMALL", "MEDIUM", "LARGE"],
+      "purpose": "Ascending size enumeration. BFS drains the zero-byte and tiny/small backlog first and only reaches the size-capped MEDIUM/LARGE tiers last. Validates that the batch-builder slots a huge count of cheap files ahead of any byte-capped batch closing.",
+      "totals": { "files": 29688, "batches": 56 },
+      "levels": [
+        { "level": 0, "tier": "ZERO",   "seed": 1000, "num_files": 16000, "batches": 8,  "size_bytes": 0,         "content": "sparse", "root": "/bryck/cloudcp_sched_data/SCH-ORD-01" },
+        { "level": 1, "tier": "TINY",   "seed": 1001, "num_files": 8176,  "batches": 16, "size_bytes": 16384,     "content": "random", "root": "/bryck/cloudcp_sched_data/SCH-ORD-01/L1" },
+        { "level": 2, "tier": "SMALL",  "seed": 1002, "num_files": 5072,  "batches": 16, "size_bytes": 2097152,   "content": "random", "root": "/bryck/cloudcp_sched_data/SCH-ORD-01/L1/L2" },
+        { "level": 3, "tier": "MEDIUM", "seed": 1003, "num_files": 400,   "batches": 8,  "size_bytes": 104857600, "content": "sparse", "root": "/bryck/cloudcp_sched_data/SCH-ORD-01/L1/L2/L3" },
+        { "level": 4, "tier": "LARGE",  "seed": 1004, "num_files": 40,    "batches": 8,  "size_bytes": 1073741824,"content": "sparse", "root": "/bryck/cloudcp_sched_data/SCH-ORD-01/L1/L2/L3/L4" }
+      ]
+    },
+    {
+      "id": "SCH-ORD-02",
+      "number": 2,
+      "profile": "ORDER",
+      "ordering_code": "TSMLZ",
+      "enumeration_order": ["TINY", "SMALL", "MEDIUM", "LARGE", "ZERO"],
+      "purpose": "Tiny-through-large then zero-byte last. Validates that the zero-byte (count-only) tier is enumerated and slotted AFTER every sized tier, so its count-capped batches close independently of any TARGET_SIZE pressure seen earlier.",
+      "totals": { "files": 29688, "batches": 56 },
+      "levels": [
+        { "level": 0, "tier": "TINY",   "seed": 2000, "num_files": 8176,  "batches": 16, "size_bytes": 16384,     "content": "random", "root": "/bryck/cloudcp_sched_data/SCH-ORD-02" },
+        { "level": 1, "tier": "SMALL",  "seed": 2001, "num_files": 5072,  "batches": 16, "size_bytes": 2097152,   "content": "random", "root": "/bryck/cloudcp_sched_data/SCH-ORD-02/L1" },
+        { "level": 2, "tier": "MEDIUM", "seed": 2002, "num_files": 400,   "batches": 8,  "size_bytes": 104857600, "content": "sparse", "root": "/bryck/cloudcp_sched_data/SCH-ORD-02/L1/L2" },
+        { "level": 3, "tier": "LARGE",  "seed": 2003, "num_files": 40,    "batches": 8,  "size_bytes": 1073741824,"content": "sparse", "root": "/bryck/cloudcp_sched_data/SCH-ORD-02/L1/L2/L3" },
+        { "level": 4, "tier": "ZERO",   "seed": 2004, "num_files": 16000, "batches": 8,  "size_bytes": 0,         "content": "sparse", "root": "/bryck/cloudcp_sched_data/SCH-ORD-02/L1/L2/L3/L4" }
+      ]
+    },
+    {
+      "id": "SCH-ORD-03",
+      "number": 3,
+      "profile": "ORDER",
+      "ordering_code": "SMLZT",
+      "enumeration_order": ["SMALL", "MEDIUM", "LARGE", "ZERO", "TINY"],
+      "purpose": "Small-first with a mixed tail. Validates enumeration that begins mid-spectrum (SMALL), hits the byte-capped MEDIUM/LARGE, then returns to the cheap ZERO/TINY tiers, exercising re-entry into count-capped slotting after size-dominated batches.",
+      "totals": { "files": 29688, "batches": 56 },
+      "levels": [
+        { "level": 0, "tier": "SMALL",  "seed": 3000, "num_files": 5072,  "batches": 16, "size_bytes": 2097152,   "content": "random", "root": "/bryck/cloudcp_sched_data/SCH-ORD-03" },
+        { "level": 1, "tier": "MEDIUM", "seed": 3001, "num_files": 400,   "batches": 8,  "size_bytes": 104857600, "content": "sparse", "root": "/bryck/cloudcp_sched_data/SCH-ORD-03/L1" },
+        { "level": 2, "tier": "LARGE",  "seed": 3002, "num_files": 40,    "batches": 8,  "size_bytes": 1073741824,"content": "sparse", "root": "/bryck/cloudcp_sched_data/SCH-ORD-03/L1/L2" },
+        { "level": 3, "tier": "ZERO",   "seed": 3003, "num_files": 16000, "batches": 8,  "size_bytes": 0,         "content": "sparse", "root": "/bryck/cloudcp_sched_data/SCH-ORD-03/L1/L2/L3" },
+        { "level": 4, "tier": "TINY",   "seed": 3004, "num_files": 8176,  "batches": 16, "size_bytes": 16384,     "content": "random", "root": "/bryck/cloudcp_sched_data/SCH-ORD-03/L1/L2/L3/L4" }
+      ]
+    },
+    {
+      "id": "SCH-ORD-04",
+      "number": 4,
+      "profile": "ORDER",
+      "ordering_code": "MLZTS",
+      "enumeration_order": ["MEDIUM", "LARGE", "ZERO", "TINY", "SMALL"],
+      "purpose": "Big-first: MEDIUM then LARGE are enumerated at the top, so byte-capped batches close almost immediately, before the cheap ZERO/TINY/SMALL backlog. Validates early size-cap closure followed by sustained count-cap slotting.",
+      "totals": { "files": 29688, "batches": 56 },
+      "levels": [
+        { "level": 0, "tier": "MEDIUM", "seed": 4000, "num_files": 400,   "batches": 8,  "size_bytes": 104857600, "content": "sparse", "root": "/bryck/cloudcp_sched_data/SCH-ORD-04" },
+        { "level": 1, "tier": "LARGE",  "seed": 4001, "num_files": 40,    "batches": 8,  "size_bytes": 1073741824,"content": "sparse", "root": "/bryck/cloudcp_sched_data/SCH-ORD-04/L1" },
+        { "level": 2, "tier": "ZERO",   "seed": 4002, "num_files": 16000, "batches": 8,  "size_bytes": 0,         "content": "sparse", "root": "/bryck/cloudcp_sched_data/SCH-ORD-04/L1/L2" },
+        { "level": 3, "tier": "TINY",   "seed": 4003, "num_files": 8176,  "batches": 16, "size_bytes": 16384,     "content": "random", "root": "/bryck/cloudcp_sched_data/SCH-ORD-04/L1/L2/L3" },
+        { "level": 4, "tier": "SMALL",  "seed": 4004, "num_files": 5072,  "batches": 16, "size_bytes": 2097152,   "content": "random", "root": "/bryck/cloudcp_sched_data/SCH-ORD-04/L1/L2/L3/L4" }
+      ]
+    },
+    {
+      "id": "SCH-ORD-05",
+      "number": 5,
+      "profile": "ORDER",
+      "ordering_code": "LZTSM",
+      "enumeration_order": ["LARGE", "ZERO", "TINY", "SMALL", "MEDIUM"],
+      "purpose": "Large-first. The 1 GiB tier is enumerated at the chain root, producing immediate size-capped batches, then a long tail of cheap tiers with MEDIUM re-appearing last. Validates that a heavy leading tier does not starve later count-capped slotting.",
+      "totals": { "files": 29688, "batches": 56 },
+      "levels": [
+        { "level": 0, "tier": "LARGE",  "seed": 5000, "num_files": 40,    "batches": 8,  "size_bytes": 1073741824,"content": "sparse", "root": "/bryck/cloudcp_sched_data/SCH-ORD-05" },
+        { "level": 1, "tier": "ZERO",   "seed": 5001, "num_files": 16000, "batches": 8,  "size_bytes": 0,         "content": "sparse", "root": "/bryck/cloudcp_sched_data/SCH-ORD-05/L1" },
+        { "level": 2, "tier": "TINY",   "seed": 5002, "num_files": 8176,  "batches": 16, "size_bytes": 16384,     "content": "random", "root": "/bryck/cloudcp_sched_data/SCH-ORD-05/L1/L2" },
+        { "level": 3, "tier": "SMALL",  "seed": 5003, "num_files": 5072,  "batches": 16, "size_bytes": 2097152,   "content": "random", "root": "/bryck/cloudcp_sched_data/SCH-ORD-05/L1/L2/L3" },
+        { "level": 4, "tier": "MEDIUM", "seed": 5004, "num_files": 400,   "batches": 8,  "size_bytes": 104857600, "content": "sparse", "root": "/bryck/cloudcp_sched_data/SCH-ORD-05/L1/L2/L3/L4" }
+      ]
+    },
+    {
+      "id": "SCH-ORD-06",
+      "number": 6,
+      "profile": "ORDER",
+      "ordering_code": "LMSTZ",
+      "enumeration_order": ["LARGE", "MEDIUM", "SMALL", "TINY", "ZERO"],
+      "purpose": "Strict descending enumeration (largest to smallest). The mirror image of SCH-ORD-01. Validates that byte-capped batches dominate the head of the enumeration and count-capped batches dominate the tail, with the zero-byte tier drained last.",
+      "totals": { "files": 29688, "batches": 56 },
+      "levels": [
+        { "level": 0, "tier": "LARGE",  "seed": 6000, "num_files": 40,    "batches": 8,  "size_bytes": 1073741824,"content": "sparse", "root": "/bryck/cloudcp_sched_data/SCH-ORD-06" },
+        { "level": 1, "tier": "MEDIUM", "seed": 6001, "num_files": 400,   "batches": 8,  "size_bytes": 104857600, "content": "sparse", "root": "/bryck/cloudcp_sched_data/SCH-ORD-06/L1" },
+        { "level": 2, "tier": "SMALL",  "seed": 6002, "num_files": 5072,  "batches": 16, "size_bytes": 2097152,   "content": "random", "root": "/bryck/cloudcp_sched_data/SCH-ORD-06/L1/L2" },
+        { "level": 3, "tier": "TINY",   "seed": 6003, "num_files": 8176,  "batches": 16, "size_bytes": 16384,     "content": "random", "root": "/bryck/cloudcp_sched_data/SCH-ORD-06/L1/L2/L3" },
+        { "level": 4, "tier": "ZERO",   "seed": 6004, "num_files": 16000, "batches": 8,  "size_bytes": 0,         "content": "sparse", "root": "/bryck/cloudcp_sched_data/SCH-ORD-06/L1/L2/L3/L4" }
+      ]
+    },
+    {
+      "id": "SCH-ORD-07",
+      "number": 7,
+      "profile": "ORDER",
+      "ordering_code": "MSTZL",
+      "enumeration_order": ["MEDIUM", "SMALL", "TINY", "ZERO", "LARGE"],
+      "purpose": "Large tier deferred to the very end. Enumeration works from MEDIUM down through the cheap tiers, then hits the heaviest LARGE tier last. Validates that a trailing byte-capped tier is scheduled correctly after a long count-capped run.",
+      "totals": { "files": 29688, "batches": 56 },
+      "levels": [
+        { "level": 0, "tier": "MEDIUM", "seed": 7000, "num_files": 400,   "batches": 8,  "size_bytes": 104857600, "content": "sparse", "root": "/bryck/cloudcp_sched_data/SCH-ORD-07" },
+        { "level": 1, "tier": "SMALL",  "seed": 7001, "num_files": 5072,  "batches": 16, "size_bytes": 2097152,   "content": "random", "root": "/bryck/cloudcp_sched_data/SCH-ORD-07/L1" },
+        { "level": 2, "tier": "TINY",   "seed": 7002, "num_files": 8176,  "batches": 16, "size_bytes": 16384,     "content": "random", "root": "/bryck/cloudcp_sched_data/SCH-ORD-07/L1/L2" },
+        { "level": 3, "tier": "ZERO",   "seed": 7003, "num_files": 16000, "batches": 8,  "size_bytes": 0,         "content": "sparse", "root": "/bryck/cloudcp_sched_data/SCH-ORD-07/L1/L2/L3" },
+        { "level": 4, "tier": "LARGE",  "seed": 7004, "num_files": 40,    "batches": 8,  "size_bytes": 1073741824,"content": "sparse", "root": "/bryck/cloudcp_sched_data/SCH-ORD-07/L1/L2/L3/L4" }
+      ]
+    },
+    {
+      "id": "SCH-ORD-08",
+      "number": 8,
+      "profile": "ORDER",
+      "ordering_code": "STZLM",
+      "enumeration_order": ["SMALL", "TINY", "ZERO", "LARGE", "MEDIUM"],
+      "purpose": "Heavy tiers in the middle/tail. Cheap tiers (SMALL/TINY/ZERO) lead, then LARGE and MEDIUM close the chain. Validates interleaving of count-capped and byte-capped batches when the size spike arrives late.",
+      "totals": { "files": 29688, "batches": 56 },
+      "levels": [
+        { "level": 0, "tier": "SMALL",  "seed": 8000, "num_files": 5072,  "batches": 16, "size_bytes": 2097152,   "content": "random", "root": "/bryck/cloudcp_sched_data/SCH-ORD-08" },
+        { "level": 1, "tier": "TINY",   "seed": 8001, "num_files": 8176,  "batches": 16, "size_bytes": 16384,     "content": "random", "root": "/bryck/cloudcp_sched_data/SCH-ORD-08/L1" },
+        { "level": 2, "tier": "ZERO",   "seed": 8002, "num_files": 16000, "batches": 8,  "size_bytes": 0,         "content": "sparse", "root": "/bryck/cloudcp_sched_data/SCH-ORD-08/L1/L2" },
+        { "level": 3, "tier": "LARGE",  "seed": 8003, "num_files": 40,    "batches": 8,  "size_bytes": 1073741824,"content": "sparse", "root": "/bryck/cloudcp_sched_data/SCH-ORD-08/L1/L2/L3" },
+        { "level": 4, "tier": "MEDIUM", "seed": 8004, "num_files": 400,   "batches": 8,  "size_bytes": 104857600, "content": "sparse", "root": "/bryck/cloudcp_sched_data/SCH-ORD-08/L1/L2/L3/L4" }
+      ]
+    },
+    {
+      "id": "SCH-ORD-09",
+      "number": 9,
+      "profile": "ORDER",
+      "ordering_code": "TZLMS",
+      "enumeration_order": ["TINY", "ZERO", "LARGE", "MEDIUM", "SMALL"],
+      "purpose": "Cheap-then-spike-then-cheap. TINY and ZERO lead, a LARGE+MEDIUM spike sits in the middle, and SMALL closes. Validates that the scheduler returns to count-capped slotting after a mid-chain byte-capped spike.",
+      "totals": { "files": 29688, "batches": 56 },
+      "levels": [
+        { "level": 0, "tier": "TINY",   "seed": 9000, "num_files": 8176,  "batches": 16, "size_bytes": 16384,     "content": "random", "root": "/bryck/cloudcp_sched_data/SCH-ORD-09" },
+        { "level": 1, "tier": "ZERO",   "seed": 9001, "num_files": 16000, "batches": 8,  "size_bytes": 0,         "content": "sparse", "root": "/bryck/cloudcp_sched_data/SCH-ORD-09/L1" },
+        { "level": 2, "tier": "LARGE",  "seed": 9002, "num_files": 40,    "batches": 8,  "size_bytes": 1073741824,"content": "sparse", "root": "/bryck/cloudcp_sched_data/SCH-ORD-09/L1/L2" },
+        { "level": 3, "tier": "MEDIUM", "seed": 9003, "num_files": 400,   "batches": 8,  "size_bytes": 104857600, "content": "sparse", "root": "/bryck/cloudcp_sched_data/SCH-ORD-09/L1/L2/L3" },
+        { "level": 4, "tier": "SMALL",  "seed": 9004, "num_files": 5072,  "batches": 16, "size_bytes": 2097152,   "content": "random", "root": "/bryck/cloudcp_sched_data/SCH-ORD-09/L1/L2/L3/L4" }
+      ]
+    },
+    {
+      "id": "SCH-ORD-10",
+      "number": 10,
+      "profile": "ORDER",
+      "ordering_code": "ZLMST",
+      "enumeration_order": ["ZERO", "LARGE", "MEDIUM", "SMALL", "TINY"],
+      "purpose": "Zero-byte first, immediately followed by the heaviest tiers, then descending cheap tiers. Validates that count-only batches at the head do not perturb the byte-capped closure of the LARGE/MEDIUM tiers that follow.",
+      "totals": { "files": 29688, "batches": 56 },
+      "levels": [
+        { "level": 0, "tier": "ZERO",   "seed": 10000, "num_files": 16000, "batches": 8,  "size_bytes": 0,         "content": "sparse", "root": "/bryck/cloudcp_sched_data/SCH-ORD-10" },
+        { "level": 1, "tier": "LARGE",  "seed": 10001, "num_files": 40,    "batches": 8,  "size_bytes": 1073741824,"content": "sparse", "root": "/bryck/cloudcp_sched_data/SCH-ORD-10/L1" },
+        { "level": 2, "tier": "MEDIUM", "seed": 10002, "num_files": 400,   "batches": 8,  "size_bytes": 104857600, "content": "sparse", "root": "/bryck/cloudcp_sched_data/SCH-ORD-10/L1/L2" },
+        { "level": 3, "tier": "SMALL",  "seed": 10003, "num_files": 5072,  "batches": 16, "size_bytes": 2097152,   "content": "random", "root": "/bryck/cloudcp_sched_data/SCH-ORD-10/L1/L2/L3" },
+        { "level": 4, "tier": "TINY",   "seed": 10004, "num_files": 8176,  "batches": 16, "size_bytes": 16384,     "content": "random", "root": "/bryck/cloudcp_sched_data/SCH-ORD-10/L1/L2/L3/L4" }
+      ]
+    },
+    {
+      "id": "SCH-ORD-11",
+      "number": 11,
+      "profile": "ORDER",
+      "ordering_code": "LSZTM",
+      "enumeration_order": ["LARGE", "SMALL", "ZERO", "TINY", "MEDIUM"],
+      "purpose": "Scenario mix with byte-capped tiers bracketing the chain (LARGE first, MEDIUM last) and cheap tiers between. Validates scheduling stability when size spikes appear at both ends of the enumeration.",
+      "totals": { "files": 29688, "batches": 56 },
+      "levels": [
+        { "level": 0, "tier": "LARGE",  "seed": 11000, "num_files": 40,    "batches": 8,  "size_bytes": 1073741824,"content": "sparse", "root": "/bryck/cloudcp_sched_data/SCH-ORD-11" },
+        { "level": 1, "tier": "SMALL",  "seed": 11001, "num_files": 5072,  "batches": 16, "size_bytes": 2097152,   "content": "random", "root": "/bryck/cloudcp_sched_data/SCH-ORD-11/L1" },
+        { "level": 2, "tier": "ZERO",   "seed": 11002, "num_files": 16000, "batches": 8,  "size_bytes": 0,         "content": "sparse", "root": "/bryck/cloudcp_sched_data/SCH-ORD-11/L1/L2" },
+        { "level": 3, "tier": "TINY",   "seed": 11003, "num_files": 8176,  "batches": 16, "size_bytes": 16384,     "content": "random", "root": "/bryck/cloudcp_sched_data/SCH-ORD-11/L1/L2/L3" },
+        { "level": 4, "tier": "MEDIUM", "seed": 11004, "num_files": 400,   "batches": 8,  "size_bytes": 104857600, "content": "sparse", "root": "/bryck/cloudcp_sched_data/SCH-ORD-11/L1/L2/L3/L4" }
+      ]
+    },
+    {
+      "id": "SCH-ORD-12",
+      "number": 12,
+      "profile": "ORDER",
+      "ordering_code": "MZLTS",
+      "enumeration_order": ["MEDIUM", "ZERO", "LARGE", "TINY", "SMALL"],
+      "purpose": "Scenario mix alternating heavy and cheap tiers (MEDIUM, ZERO, LARGE, TINY, SMALL). Validates repeated switching between byte-capped and count-capped batch closing across the enumeration.",
+      "totals": { "files": 29688, "batches": 56 },
+      "levels": [
+        { "level": 0, "tier": "MEDIUM", "seed": 12000, "num_files": 400,   "batches": 8,  "size_bytes": 104857600, "content": "sparse", "root": "/bryck/cloudcp_sched_data/SCH-ORD-12" },
+        { "level": 1, "tier": "ZERO",   "seed": 12001, "num_files": 16000, "batches": 8,  "size_bytes": 0,         "content": "sparse", "root": "/bryck/cloudcp_sched_data/SCH-ORD-12/L1" },
+        { "level": 2, "tier": "LARGE",  "seed": 12002, "num_files": 40,    "batches": 8,  "size_bytes": 1073741824,"content": "sparse", "root": "/bryck/cloudcp_sched_data/SCH-ORD-12/L1/L2" },
+        { "level": 3, "tier": "TINY",   "seed": 12003, "num_files": 8176,  "batches": 16, "size_bytes": 16384,     "content": "random", "root": "/bryck/cloudcp_sched_data/SCH-ORD-12/L1/L2/L3" },
+        { "level": 4, "tier": "SMALL",  "seed": 12004, "num_files": 5072,  "batches": 16, "size_bytes": 2097152,   "content": "random", "root": "/bryck/cloudcp_sched_data/SCH-ORD-12/L1/L2/L3/L4" }
+      ]
+    },
+    {
+      "id": "SCH-DEEP-01",
+      "number": 13,
+      "profile": "DEEP",
+      "ordering_code": "ZTSML",
+      "enumeration_order": ["ZERO", "TINY", "SMALL", "MEDIUM", "LARGE"],
+      "purpose": "Deep ascending backlog. Same enumeration order as SCH-ORD-01 but with many blocks per tier (R up to 100), building a large sustained queue of cheap files before the byte-capped tiers. Validates sustained scheduling, back-pressure and streamed batch publication under a known ascending order.",
+      "totals": { "files": 1068680, "batches": 1032 },
+      "levels": [
+        { "level": 0, "tier": "ZERO",   "seed": 13000, "num_files": 800000, "batches": 400, "size_bytes": 0,         "content": "sparse", "root": "/bryck/cloudcp_sched_data/SCH-DEEP-01" },
+        { "level": 1, "tier": "TINY",   "seed": 13001, "num_files": 204400, "batches": 400, "size_bytes": 16384,     "content": "random", "root": "/bryck/cloudcp_sched_data/SCH-DEEP-01/L1" },
+        { "level": 2, "tier": "SMALL",  "seed": 13002, "num_files": 63400,  "batches": 200, "size_bytes": 2097152,   "content": "random", "root": "/bryck/cloudcp_sched_data/SCH-DEEP-01/L1/L2" },
+        { "level": 3, "tier": "MEDIUM", "seed": 13003, "num_files": 800,    "batches": 16,  "size_bytes": 104857600, "content": "sparse", "root": "/bryck/cloudcp_sched_data/SCH-DEEP-01/L1/L2/L3" },
+        { "level": 4, "tier": "LARGE",  "seed": 13004, "num_files": 80,     "batches": 16,  "size_bytes": 1073741824,"content": "sparse", "root": "/bryck/cloudcp_sched_data/SCH-DEEP-01/L1/L2/L3/L4" }
+      ]
+    },
+    {
+      "id": "SCH-DEEP-02",
+      "number": 14,
+      "profile": "DEEP",
+      "ordering_code": "LMSTZ",
+      "enumeration_order": ["LARGE", "MEDIUM", "SMALL", "TINY", "ZERO"],
+      "purpose": "Deep large-first enumeration. Heavy byte-capped tiers lead and a deep cheap-file backlog trails. Validates that a large leading working-set does not starve the sustained count-capped slotting of the deep ZERO/TINY tail.",
+      "totals": { "files": 1068680, "batches": 1032 },
+      "levels": [
+        { "level": 0, "tier": "LARGE",  "seed": 14000, "num_files": 80,     "batches": 16,  "size_bytes": 1073741824,"content": "sparse", "root": "/bryck/cloudcp_sched_data/SCH-DEEP-02" },
+        { "level": 1, "tier": "MEDIUM", "seed": 14001, "num_files": 800,    "batches": 16,  "size_bytes": 104857600, "content": "sparse", "root": "/bryck/cloudcp_sched_data/SCH-DEEP-02/L1" },
+        { "level": 2, "tier": "SMALL",  "seed": 14002, "num_files": 63400,  "batches": 200, "size_bytes": 2097152,   "content": "random", "root": "/bryck/cloudcp_sched_data/SCH-DEEP-02/L1/L2" },
+        { "level": 3, "tier": "TINY",   "seed": 14003, "num_files": 204400, "batches": 400, "size_bytes": 16384,     "content": "random", "root": "/bryck/cloudcp_sched_data/SCH-DEEP-02/L1/L2/L3" },
+        { "level": 4, "tier": "ZERO",   "seed": 14004, "num_files": 800000, "batches": 400, "size_bytes": 0,         "content": "sparse", "root": "/bryck/cloudcp_sched_data/SCH-DEEP-02/L1/L2/L3/L4" }
+      ]
+    },
+    {
+      "id": "SCH-DEEP-03",
+      "number": 15,
+      "profile": "DEEP",
+      "ordering_code": "TZSML",
+      "enumeration_order": ["TINY", "ZERO", "SMALL", "MEDIUM", "LARGE"],
+      "purpose": "Deep tiny-first (WAN-like) enumeration. A massive TINY+ZERO count backlog leads, followed by SMALL and the byte-capped MEDIUM/LARGE tail. Validates scheduler throughput and fairness under a dominant small-file working-set typical of WAN/latency-bound transfers.",
+      "totals": { "files": 1068680, "batches": 1032 },
+      "levels": [
+        { "level": 0, "tier": "TINY",   "seed": 15000, "num_files": 204400, "batches": 400, "size_bytes": 16384,     "content": "random", "root": "/bryck/cloudcp_sched_data/SCH-DEEP-03" },
+        { "level": 1, "tier": "ZERO",   "seed": 15001, "num_files": 800000, "batches": 400, "size_bytes": 0,         "content": "sparse", "root": "/bryck/cloudcp_sched_data/SCH-DEEP-03/L1" },
+        { "level": 2, "tier": "SMALL",  "seed": 15002, "num_files": 63400,  "batches": 200, "size_bytes": 2097152,   "content": "random", "root": "/bryck/cloudcp_sched_data/SCH-DEEP-03/L1/L2" },
+        { "level": 3, "tier": "MEDIUM", "seed": 15003, "num_files": 800,    "batches": 16,  "size_bytes": 104857600, "content": "sparse", "root": "/bryck/cloudcp_sched_data/SCH-DEEP-03/L1/L2/L3" },
+        { "level": 4, "tier": "LARGE",  "seed": 15004, "num_files": 80,     "batches": 16,  "size_bytes": 1073741824,"content": "sparse", "root": "/bryck/cloudcp_sched_data/SCH-DEEP-03/L1/L2/L3/L4" }
+      ]
+    }
+  ]
+}

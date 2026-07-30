@@ -1,0 +1,14 @@
+version: 1
+mode: flat
+root: /bryck/cloudcp_sched_data/SCH-ORD-02/L1
+seed: 2001
+content:
+  type: random
+size:
+  type: fixed
+  bytes: 2MB
+naming:
+  prefix: "s-"
+  length: 12
+flat:
+  num_files: 5072

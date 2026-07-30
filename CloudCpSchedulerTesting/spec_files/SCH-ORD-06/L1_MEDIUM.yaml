@@ -1,0 +1,14 @@
+version: 1
+mode: flat
+root: /bryck/cloudcp_sched_data/SCH-ORD-06/L1
+seed: 6001
+content:
+  type: sparse
+size:
+  type: fixed
+  bytes: 100MB
+naming:
+  prefix: "m-"
+  length: 12
+flat:
+  num_files: 400

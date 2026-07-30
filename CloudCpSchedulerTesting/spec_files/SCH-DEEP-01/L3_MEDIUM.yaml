@@ -1,0 +1,14 @@
+version: 1
+mode: flat
+root: /bryck/cloudcp_sched_data/SCH-DEEP-01/L1/L2/L3
+seed: 13003
+content:
+  type: sparse
+size:
+  type: fixed
+  bytes: 100MB
+naming:
+  prefix: "m-"
+  length: 12
+flat:
+  num_files: 800

@@ -1,0 +1,14 @@
+version: 1
+mode: flat
+root: /bryck/cloudcp_sched_data/SCH-ORD-01
+seed: 1000
+content:
+  type: sparse
+size:
+  type: fixed
+  bytes: 0
+naming:
+  prefix: "z-"
+  length: 12
+flat:
+  num_files: 16000

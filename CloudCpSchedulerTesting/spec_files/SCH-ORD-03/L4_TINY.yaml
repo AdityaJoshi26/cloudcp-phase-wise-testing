@@ -1,0 +1,14 @@
+version: 1
+mode: flat
+root: /bryck/cloudcp_sched_data/SCH-ORD-03/L1/L2/L3/L4
+seed: 3004
+content:
+  type: random
+size:
+  type: fixed
+  bytes: 16KB
+naming:
+  prefix: "t-"
+  length: 12
+flat:
+  num_files: 8176

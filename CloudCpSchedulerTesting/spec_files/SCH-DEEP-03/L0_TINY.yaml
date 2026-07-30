@@ -1,0 +1,14 @@
+version: 1
+mode: flat
+root: /bryck/cloudcp_sched_data/SCH-DEEP-03
+seed: 15000
+content:
+  type: random
+size:
+  type: fixed
+  bytes: 16KB
+naming:
+  prefix: "t-"
+  length: 12
+flat:
+  num_files: 204400
