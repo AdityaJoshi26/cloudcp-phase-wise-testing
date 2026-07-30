@@ -1,0 +1,34 @@
+version: 1
+mode: flat
+root: /bryck/cloudcp_test/neg_base
+threads: 4
+seed: 42
+
+# Dedicated base dataset for the "data present + corrupted batch" negative
+# scenario (Scenario B). Small on purpose: ~20 real, small files so datagen is
+# fast and the corrupted-batch cases have a clear ordered prefix of valid
+# records. NOT placed under data/specs/ so it is never treated as a positive
+# dataset. cloudcp uses --fs-prefix /bryck/cloudcp_test/neg_base against these.
+content:
+  type: random
+  buffer_size: 8MB
+
+naming:
+  charset: ascii
+  alphabet: [lower, digit]
+  prefix: "neg-"
+  length: 12
+  collision_strategy: append-index
+
+flat:
+  num_files: 20
+
+size:
+  type: range
+  min: 4KB
+  max: 64KB
+  distribution: uniform
+
+extensions:
+  - ext: .bin
+    weight: 1
