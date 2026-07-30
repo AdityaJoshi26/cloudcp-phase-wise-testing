@@ -1,0 +1,301 @@
+{
+  "_meta": {
+    "description": "Map of datagen datasets to their category / sub-category / purpose. Derived from dataset_generation_plan.md and generate_specs.py. Key = dataset name; value = {category, subcategory, description}.",
+    "categories": {
+      "1": "Single-Tier Isolation",
+      "2": "Batch Builder Mechanics",
+      "3": "Batch Exhaustion / Weight Shift",
+      "4": "Filename & Encoding Stress",
+      "5": "File Type Coverage",
+      "6": "Network Profile Comparison",
+      "7": "Mixed Full-Pipeline",
+      "8": "Configuration Edge Cases",
+      "9": "Single-File Transfer",
+      "10": "Sub-Range Isolation",
+      "11": "Alternative Weight Ratios",
+      "12": "Tiny/Small-Heavy Mixed"
+    },
+    "dataset_count": 54
+  },
+
+  "DS-P1-01": {
+    "category": "Single-Tier Isolation",
+    "subcategory": "Zero tier (pure)",
+    "description": "5,000,000 zero-byte files in a 3-level tree. Stress-tests zero-bucket mass enumeration and correct tier assignment. All 0 bytes; 10 filename variants x 12 types."
+  },
+  "DS-P1-02": {
+    "category": "Single-Tier Isolation",
+    "subcategory": "Tiny tier (pure, ~500 GB)",
+    "description": "1,000,000 tiny files (1 B - 1 MB) over three size bands, plus 10,000 zero-byte seeds. Isolates tiny-tier behaviour where S3 request rate (not bandwidth) is the bottleneck."
+  },
+  "DS-P1-03": {
+    "category": "Single-Tier Isolation",
+    "subcategory": "Small tier (pure, ~5 TB)",
+    "description": "100,000 small files (1 MB - 100 MB) across three bands + 1,000 zero seeds. Exercises both count-seal and byte-seal; the 25-100 MB band crosses the 64 MB multipart threshold."
+  },
+  "DS-P1-04": {
+    "category": "Single-Tier Isolation",
+    "subcategory": "Medium tier (pure, ~5 TB)",
+    "description": "10,000 medium files (100 MB - 1 GB) across three bands + 100 zero seeds. Byte-seal dominates; every file uses multipart upload."
+  },
+  "DS-P1-05": {
+    "category": "Single-Tier Isolation",
+    "subcategory": "Large tier (smoke, ~500 GB)",
+    "description": "20 large files (5-50 GB) in a single directory. Quick large-file smoke test: multipart upload, key composition, batch sealing at 8 files."
+  },
+  "DS-P1-06": {
+    "category": "Single-Tier Isolation",
+    "subcategory": "Large tier (perf baseline, ~10 TB)",
+    "description": "200 large files (5-100 GB) in a 2-level tree. Full-scale bandwidth-saturation and multipart-assembly regression baseline."
+  },
+
+  "DS-P2-01": {
+    "category": "Batch Builder Mechanics",
+    "subcategory": "Boundary-value probe",
+    "description": "110 files: 10 files at each of 11 exact size boundaries (0 B, 1 B, 10 KB, ~1 MB, 1 MB, 63 MB, 64 MB, 99 MB, 100 MB, 999 MB, 1 GB). Verifies exact bucket assignment and the 64 MB multipart boundary."
+  },
+  "DS-P2-02": {
+    "category": "Batch Builder Mechanics",
+    "subcategory": "Tiny count-seal trigger",
+    "description": "2,001 tiny files of exactly 100 B. Total stays far below 256 MB so only the count-seal (2,000 files) fires; file #2001 opens a new batch."
+  },
+  "DS-P2-03": {
+    "category": "Batch Builder Mechanics",
+    "subcategory": "Tiny byte-seal trigger",
+    "description": "260 tiny files of exactly 1 MB. Count stays below 2,000 so only the byte-seal fires at file #256 (256 MB)."
+  },
+  "DS-P2-04": {
+    "category": "Batch Builder Mechanics",
+    "subcategory": "Small count-seal trigger",
+    "description": "513 small files of exactly 1 MB. Batch seals after 512 files (count); file #513 begins a new batch."
+  },
+  "DS-P2-05": {
+    "category": "Batch Builder Mechanics",
+    "subcategory": "Medium count-seal trigger",
+    "description": "65 medium files of exactly 100 MB. Batch seals after 64 files (count); file #65 begins a new batch."
+  },
+  "DS-P2-06": {
+    "category": "Batch Builder Mechanics",
+    "subcategory": "Large count-seal trigger",
+    "description": "9 large files of exactly 2 GB. Batch seals after 8 files (count); file #9 begins a new batch. Uses FN-01..FN-09 only."
+  },
+  "DS-P2-07": {
+    "category": "Batch Builder Mechanics",
+    "subcategory": "Round-robin slot distribution",
+    "description": "800 tiny files of exactly 100 KB with no sealing. Verifies the 8 open slots each receive ~100 files in round-robin order."
+  },
+
+  "DS-P3-01": {
+    "category": "Batch Exhaustion / Weight Shift",
+    "subcategory": "Large exhausts first",
+    "description": "Multi-tier corpus (large 16, medium 1280, small 15360, tiny 60000) + 750 seeds. Large drains in ~1 cycle; verifies its 6 freed worker slots redistribute to remaining tiers."
+  },
+  "DS-P3-02": {
+    "category": "Batch Exhaustion / Weight Shift",
+    "subcategory": "Medium exhausts first",
+    "description": "large 300, medium 256, small 15360, tiny 60000 + 600 seeds. Medium drains first; its 4 slots redistribute across large/small/tiny."
+  },
+  "DS-P3-03": {
+    "category": "Batch Exhaustion / Weight Shift",
+    "subcategory": "Small exhausts first",
+    "description": "large 300, medium 1280, small 1024, tiny 60000 + 600 seeds. Small drains first; its 3 slots redistribute across large/medium/tiny."
+  },
+  "DS-P3-04": {
+    "category": "Batch Exhaustion / Weight Shift",
+    "subcategory": "Tiny exhausts first",
+    "description": "large 300, medium 1280, small 15360, tiny 6000 + 60 seeds. Tiny drains first; its 3 slots redistribute across large/medium/small."
+  },
+  "DS-P3-05": {
+    "category": "Batch Exhaustion / Weight Shift",
+    "subcategory": "Large + medium drain together",
+    "description": "large 8, medium 64, small 30720, tiny 120000 + 1200 seeds. Large and medium both drain in cycle 1; all 16 workers then split 50/50 between small and tiny."
+  },
+  "DS-P3-06": {
+    "category": "Batch Exhaustion / Weight Shift",
+    "subcategory": "Only tiny remains (last standing)",
+    "description": "large 8, medium 64, small 512, tiny 400000 + 4000 seeds. Large/medium/small drain in cycle 1; extreme work-steal test where all 16 workers converge onto tiny."
+  },
+
+  "DS-P4-01": {
+    "category": "Filename & Encoding Stress",
+    "subcategory": "Tiny tier, all 20 variants",
+    "description": "20,000 tiny files of 512 KB, 1,000 per filename variant (FN-01..FN-20). Proves each variant's raw byte sequence survives the pipeline. One subdir per variant."
+  },
+  "DS-P4-02": {
+    "category": "Filename & Encoding Stress",
+    "subcategory": "Small tier, all 20 variants",
+    "description": "4,800 small files of 10 MB, 240 per filename variant. Encoding correctness in the small tier."
+  },
+  "DS-P4-03": {
+    "category": "Filename & Encoding Stress",
+    "subcategory": "Medium tier, all 20 variants",
+    "description": "400 medium files of 200 MB, 20 per filename variant. Encoding correctness in the medium tier."
+  },
+  "DS-P4-04": {
+    "category": "Filename & Encoding Stress",
+    "subcategory": "Large tier, all 20 variants",
+    "description": "100 large files of 2 GB, 5 per filename variant. Encoding correctness in the large tier."
+  },
+  "DS-P4-05": {
+    "category": "Filename & Encoding Stress",
+    "subcategory": "Cross-tier, all 20 variants",
+    "description": "12,550 files with all 20 filename variants present across every tier (tiny/small/medium/large) + 50 zero seeds. Verifies verification-engine merge-join on variant paths across tiers."
+  },
+
+  "DS-P5-01": {
+    "category": "File Type Coverage",
+    "subcategory": "All 26 types, all tiers",
+    "description": "32,110 files ensuring all 26 file types appear in every active tier (zero/tiny/small/medium/large). Confirms no type is excluded, mis-routed, or corrupted. Content is random/sparse (not real format bytes)."
+  },
+
+  "DS-P6-01": {
+    "category": "Network Profile Comparison",
+    "subcategory": "Balanced all-tier (dual profile run)",
+    "description": "71,140 files across all tiers + 600 seeds. Same on-disk dataset run under dt2_100gbe (large-heavy) and wan_lowbw (tiny-heavy); batch-file hashes must be identical while scheduling diverges."
+  },
+
+  "DS-P7-01": {
+    "category": "Mixed Full-Pipeline",
+    "subcategory": "Small scale (~300 GB, CI baseline)",
+    "description": "91,320 files across all tiers. Fast end-to-end scan->batch->upload->verify sanity check for CI gating."
+  },
+  "DS-P7-02": {
+    "category": "Mixed Full-Pipeline",
+    "subcategory": "Medium scale (~3 TB, regression)",
+    "description": "582,150 files across all tiers. Regular regression run; exercises the fallback worker and per-tier completion summary."
+  },
+  "DS-P7-03": {
+    "category": "Mixed Full-Pipeline",
+    "subcategory": "Full scale (~10 TB, perf baseline)",
+    "description": "1,166,200 files across all tiers. Primary end-to-end performance baseline; wall time recorded for future regression comparison."
+  },
+
+  "DS-P8-01": {
+    "category": "Configuration Edge Cases",
+    "subcategory": "Empty source directory",
+    "description": "Source dir with 3 empty subdirectories and zero files. Verifies scan_state=complete, no batch files, and an empty source.index."
+  },
+  "DS-P8-02": {
+    "category": "Configuration Edge Cases",
+    "subcategory": "Single zero-byte file",
+    "description": "Exactly one 0-byte file with a Unicode emoji name (FN-08). Verifies a single record in the zero tier."
+  },
+  "DS-P8-03": {
+    "category": "Configuration Edge Cases",
+    "subcategory": "Single huge file (100 GB)",
+    "description": "Exactly one 100 GB file with a 240-char name (FN-07). Verifies large-tier multipart handling for one enormous object."
+  },
+  "DS-P8-04": {
+    "category": "Configuration Edge Cases",
+    "subcategory": "Deep directory tree (14 levels)",
+    "description": "~700 files (100 KB - 5 MB) placed at every level of a 14-deep tree. Tests scanner stack safety and resume across depths. Shape is approximated (files_in_each_dir)."
+  },
+  "DS-P8-05": {
+    "category": "Configuration Edge Cases",
+    "subcategory": "Unreadable subdirectory",
+    "description": "500 readable tiny files (1 KB - 1 MB) generated; a separate 200-file subdir is chmod 000 at runtime (manual step). Verifies exactly 500 indexed records and one scan_errors entry."
+  },
+
+  "DS-P9-01": {
+    "category": "Single-File Transfer",
+    "subcategory": "Tiny, 1 B minimum",
+    "description": "One 1-byte file (FN-04 embedded newline). Tiny bucket, single-part PUT."
+  },
+  "DS-P9-02": {
+    "category": "Single-File Transfer",
+    "subcategory": "Boundary tiny->small (1 MB)",
+    "description": "One 1 MB file (FN-12 shell metacharacters). Routes to small bucket; single-part PUT."
+  },
+  "DS-P9-03": {
+    "category": "Single-File Transfer",
+    "subcategory": "Below multipart threshold (63 MB)",
+    "description": "One 63 MB file (FN-16 leading dash). Small bucket; must use single-part PUT (below 64 MB)."
+  },
+  "DS-P9-04": {
+    "category": "Single-File Transfer",
+    "subcategory": "First multipart file (64 MB)",
+    "description": "One 64 MB file (FN-13 Windows-reserved chars). Small bucket; first size that must use multipart upload."
+  },
+  "DS-P9-05": {
+    "category": "Single-File Transfer",
+    "subcategory": "Boundary small->medium (100 MB)",
+    "description": "One 100 MB file (FN-18 zero-width Unicode). Routes to medium bucket; multipart upload."
+  },
+  "DS-P9-06": {
+    "category": "Single-File Transfer",
+    "subcategory": "Boundary medium->large (1 GB)",
+    "description": "One 1 GB file (FN-08 Unicode emoji). Routes to large bucket; multipart upload."
+  },
+  "DS-P9-07": {
+    "category": "Single-File Transfer",
+    "subcategory": "Large stress (100 GB)",
+    "description": "One 100 GB file (FN-07 240-char name). Maximum single-file multipart stress; zero incomplete parts after transfer."
+  },
+
+  "DS-P10-01": {
+    "category": "Sub-Range Isolation",
+    "subcategory": "0 B - 1 MB (zero + tiny), 1 M",
+    "description": "1,000,000 files: 50,000 zero-byte + 950,000 tiny (1 B - 1 MB). All 20 variants x 26 types. Aligns with spec_0bytes_1mb_*."
+  },
+  "DS-P10-02": {
+    "category": "Sub-Range Isolation",
+    "subcategory": "1 B - 10 KB (sub-tiny), 1 M",
+    "description": "1,000,000 files in 1 B - 10 KB. Count-seal dominates. Aligns with spec_1bytes_10kb_*."
+  },
+  "DS-P10-03": {
+    "category": "Sub-Range Isolation",
+    "subcategory": "10 KB - 1 MB (main tiny band), 1 M",
+    "description": "1,000,000 files in 10 KB - 1 MB. Mixed count/byte sealing. Aligns with spec_10kb_1mb_*."
+  },
+  "DS-P10-04": {
+    "category": "Sub-Range Isolation",
+    "subcategory": "1 MB - 4 MB (small lower), 500 K",
+    "description": "500,000 files in 1 MB - 4 MB. Count-seal dominates; all single-part PUT. Aligns with spec_1mb_4mb_*."
+  },
+  "DS-P10-05": {
+    "category": "Sub-Range Isolation",
+    "subcategory": "4 MB - 16 MB (small mid), 500 K",
+    "description": "500,000 files in 4 MB - 16 MB. Byte-seal dominates; all single-part PUT. Aligns with spec_4mb_16mb_*."
+  },
+  "DS-P10-06": {
+    "category": "Sub-Range Isolation",
+    "subcategory": "Fixed 16 MB (small uniform), 500 K",
+    "description": "500,000 files of exactly 16 MB. Byte-seal at exactly 128 files/batch (fully predictable). Aligns with spec_16mb_*."
+  },
+  "DS-P10-07": {
+    "category": "Sub-Range Isolation",
+    "subcategory": "10 GB - 120 GB (large varied), 30",
+    "description": "30 files in 10 GB - 120 GB. High size variance; some batches hold a single file. Aligns with spec_10gb_120gb_*."
+  },
+  "DS-P10-08": {
+    "category": "Sub-Range Isolation",
+    "subcategory": "200 GB - 500 GB (very large), 10",
+    "description": "10 files in 200 GB - 500 GB, one per FN-01..FN-10. Each file byte-seals immediately (1 file/batch). Aligns with spec_200gb_500gb_*."
+  },
+
+  "DS-P11-01": {
+    "category": "Alternative Weight Ratios",
+    "subcategory": "Weights 7:5:3:1 (~5 TB)",
+    "description": "~979,140 files proportioned to scheduler weights large:7 medium:5 small:3 tiny:1 (+ ~7,800 seeds). Verifies slot distribution converges to 7:5:3:1."
+  },
+  "DS-P11-02": {
+    "category": "Alternative Weight Ratios",
+    "subcategory": "Weights 9:5:2:0 (no tiny)",
+    "description": "~129,637 files proportioned to weights large:9 medium:5 small:2 tiny:0 (+ ~1,250 seeds). Tiny bucket intentionally empty; verifies zero tiny workers."
+  },
+  "DS-P11-03": {
+    "category": "Alternative Weight Ratios",
+    "subcategory": "Weights 10:6:0:0 (large + medium only)",
+    "description": "~4,047 files proportioned to weights large:10 medium:6 small:0 tiny:0 (+ ~40 seeds). Small and tiny empty; verifies only large and medium receive workers."
+  },
+  "DS-P12-01": {
+    "category": "Tiny/Small-Heavy Mixed",
+    "subcategory": "Tiny/small heavy (1M files)",
+    "description": "1,000,000 files: tiny 697,000 (200 KB-1 MB) + small 300,000 (1-10 MB) at ~70:30, plus 1,000 each of zero (0 B), medium (300-700 MB) and large (1-2 GB) for tier coverage. 20 filename variants x 26 types. ~4.1 TB."
+  },
+  "DS-P12-02": {
+    "category": "Tiny/Small-Heavy Mixed",
+    "subcategory": "Tiny/small heavy (2M files)",
+    "description": "2,000,000 files: tiny 1,397,000 (200 KB-1 MB) + small 600,000 (1-10 MB) at ~70:30, plus 1,000 each of zero (0 B), medium (300-700 MB) and large (1-2 GB) for tier coverage. 20 filename variants x 26 types. ~6.1 TB."
+  }
+}

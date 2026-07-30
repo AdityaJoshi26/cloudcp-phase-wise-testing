@@ -1,0 +1,25 @@
+# ════════════════════════════════════════════════════════════════════════════
+# Dataset   : DS-P8-01  (Phase 8 — Configuration Edge Cases)
+# Name      : Empty Source Directory
+# ────────────────────────────────────────────────────────────────────────────
+# Creates 3 empty subdirectories and ZERO files (files_per_dir: 0).
+# Verifies scan_state=complete, no batch files, empty source.index.
+# ════════════════════════════════════════════════════════════════════════════
+
+version: 1
+mode: tree
+root: /bryck/cloudcp/DS-P8-01/empty
+threads: 4
+
+content:
+  type: sparse
+
+tree:
+  fanout: 3
+  depth: 1
+  files_per_dir: 0
+  files_in_each_dir: false
+
+size:
+  type: fixed
+  bytes: 0

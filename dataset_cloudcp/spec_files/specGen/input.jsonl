@@ -1,0 +1,54 @@
+{"id":"DS-P1-01","name":"Zero-Tier Pure (Large Scale)","profile":"dt2_100gbe","tiers":[{"size":"0","files":5000000,"depth":3}]}
+{"id":"DS-P1-02","name":"Tiny-Tier Pure (~500 GB)","profile":"dt2_100gbe","tiers":[{"size":"1B-10KB","files":200000,"depth":4},{"size":"10KB-100KB","files":300000,"depth":4},{"size":"100KB-1MB","files":500000,"depth":4},{"size":"0","files":10000,"depth":4}]}
+{"id":"DS-P1-03","name":"Small-Tier Pure (~5 TB)","profile":"dt2_100gbe","tiers":[{"size":"1MB-5MB","files":30000,"depth":4},{"size":"5MB-25MB","files":40000,"depth":4},{"size":"25MB-100MB","files":30000,"depth":4},{"size":"0","files":1000,"depth":4}]}
+{"id":"DS-P1-04","name":"Medium-Tier Pure (~5 TB)","profile":"dt2_100gbe","tiers":[{"size":"100MB-250MB","files":3000,"depth":3},{"size":"250MB-700MB","files":4000,"depth":3},{"size":"700MB-1GB","files":3000,"depth":3},{"size":"0","files":100,"depth":3}]}
+{"id":"DS-P1-05","name":"Large-Tier Pure (Smoke, ~500 GB)","profile":"dt2_100gbe","tiers":[{"size":"5GB-10GB","files":5,"depth":1},{"size":"10GB-30GB","files":10,"depth":1},{"size":"30GB-50GB","files":5,"depth":1}]}
+{"id":"DS-P1-06","name":"Large-Tier Pure (Perf baseline, ~10 TB)","profile":"dt2_100gbe","tiers":[{"size":"5GB-15GB","files":40,"depth":2},{"size":"15GB-60GB","files":100,"depth":2},{"size":"60GB-100GB","files":60,"depth":2}]}
+{"id":"DS-P2-01","name":"Boundary Values Probe","profile":"dt2_100gbe","tiers":[{"size":"0","files":10,"depth":1},{"size":"1","files":10,"depth":1},{"size":"10KB","files":10,"depth":1},{"size":"999999","files":10,"depth":1},{"size":"1MB","files":10,"depth":1},{"size":"63MB","files":10,"depth":1},{"size":"64MB","files":10,"depth":1},{"size":"99MB","files":10,"depth":1},{"size":"100MB","files":10,"depth":1},{"size":"999MB","files":10,"depth":1},{"size":"1GB","files":10,"depth":1}]}
+{"id":"DS-P2-02","name":"Tiny Count-Seal (2001)","profile":"dt2_100gbe","tiers":[{"size":"100","files":2001,"depth":1}]}
+{"id":"DS-P2-03","name":"Tiny Byte-Seal (260)","profile":"dt2_100gbe","tiers":[{"size":"1MB","files":260,"depth":1}]}
+{"id":"DS-P2-04","name":"Small Count-Seal (513)","profile":"dt2_100gbe","tiers":[{"size":"1MB","files":513,"depth":1}]}
+{"id":"DS-P2-05","name":"Medium Count-Seal (65)","profile":"dt2_100gbe","tiers":[{"size":"100MB","files":65,"depth":1}]}
+{"id":"DS-P2-06","name":"Large Count-Seal (9)","profile":"dt2_100gbe","tiers":[{"size":"2GB","files":9,"depth":1}]}
+{"id":"DS-P2-07","name":"Round-Robin Distribution (800)","profile":"dt2_100gbe","tiers":[{"size":"100KB","files":800,"depth":1}]}
+{"id":"DS-P3-01","name":"Large Exhausts First","profile":"dt2_100gbe","tiers":[{"size":"8GB-12GB","files":16,"depth":3},{"size":"400MB-600MB","files":1280,"depth":3},{"size":"1MB-4MB","files":15360,"depth":3},{"size":"200KB-600KB","files":60000,"depth":3},{"size":"0","files":750,"depth":3}]}
+{"id":"DS-P3-02","name":"Medium Exhausts First","profile":"dt2_100gbe","tiers":[{"size":"8GB-12GB","files":300,"depth":3},{"size":"400MB-600MB","files":256,"depth":3},{"size":"1MB-4MB","files":15360,"depth":3},{"size":"200KB-600KB","files":60000,"depth":3},{"size":"0","files":600,"depth":3}]}
+{"id":"DS-P3-03","name":"Small Exhausts First","profile":"dt2_100gbe","tiers":[{"size":"8GB-12GB","files":300,"depth":3},{"size":"400MB-600MB","files":1280,"depth":3},{"size":"1MB-4MB","files":1024,"depth":3},{"size":"200KB-600KB","files":60000,"depth":3},{"size":"0","files":600,"depth":3}]}
+{"id":"DS-P3-04","name":"Tiny Exhausts First","profile":"dt2_100gbe","tiers":[{"size":"8GB-12GB","files":300,"depth":3},{"size":"400MB-600MB","files":1280,"depth":3},{"size":"1MB-4MB","files":15360,"depth":3},{"size":"200KB-600KB","files":6000,"depth":3},{"size":"0","files":60,"depth":3}]}
+{"id":"DS-P3-05","name":"Large+Medium Drain Together","profile":"dt2_100gbe","tiers":[{"size":"8GB-12GB","files":8,"depth":3},{"size":"400MB-600MB","files":64,"depth":3},{"size":"1MB-4MB","files":30720,"depth":3},{"size":"200KB-600KB","files":120000,"depth":3},{"size":"0","files":1200,"depth":3}]}
+{"id":"DS-P3-06","name":"Only Tiny Remains","profile":"dt2_100gbe","tiers":[{"size":"8GB-12GB","files":8,"depth":3},{"size":"400MB-600MB","files":64,"depth":3},{"size":"1MB-4MB","files":512,"depth":3},{"size":"200KB-600KB","files":400000,"depth":3},{"size":"0","files":4000,"depth":3}]}
+{"id":"DS-P4-01","name":"Filename Stress: Tiny","profile":"dt2_100gbe","tiers":[{"size":"512KB","files":20000,"depth":1}]}
+{"id":"DS-P4-02","name":"Filename Stress: Small","profile":"dt2_100gbe","tiers":[{"size":"10MB","files":4800,"depth":1}]}
+{"id":"DS-P4-03","name":"Filename Stress: Medium","profile":"dt2_100gbe","tiers":[{"size":"200MB","files":400,"depth":1}]}
+{"id":"DS-P4-04","name":"Filename Stress: Large","profile":"dt2_100gbe","tiers":[{"size":"2GB","files":100,"depth":1}]}
+{"id":"DS-P4-05","name":"Filename Stress: Cross-Tier","profile":"dt2_100gbe","tiers":[{"size":"512KB","files":10000,"depth":2},{"size":"10MB","files":2000,"depth":2},{"size":"200MB","files":400,"depth":2},{"size":"2GB","files":100,"depth":1},{"size":"0","files":50,"depth":2}]}
+{"id":"DS-P5-01","name":"All File Types, All Tiers","profile":"dt2_100gbe","tiers":[{"size":"0","files":260,"depth":2},{"size":"100KB-1MB","files":26000,"depth":3},{"size":"1MB-50MB","files":5200,"depth":3},{"size":"100MB-800MB","files":520,"depth":2},{"size":"2GB-20GB","files":130,"depth":2}]}
+{"id":"DS-P6-01","name":"Profile Comparison (All Tiers)","profile":"dt2_100gbe","tiers":[{"size":"200KB-600KB","files":60000,"depth":3},{"size":"1MB-10MB","files":10000,"depth":3},{"size":"200MB-400MB","files":500,"depth":3},{"size":"3GB-8GB","files":40,"depth":3},{"size":"0","files":600,"depth":3}]}
+{"id":"DS-P7-01","name":"Mixed Pipeline: Small (~300 GB)","profile":"dt2_100gbe","tiers":[{"size":"0","files":5000,"depth":3},{"size":"200KB-800KB","files":80000,"depth":3},{"size":"1MB-10MB","files":6000,"depth":3},{"size":"200MB-400MB","files":300,"depth":3},{"size":"5GB-12GB","files":20,"depth":3}]}
+{"id":"DS-P7-02","name":"Mixed Pipeline: Medium (~3 TB)","profile":"dt2_100gbe","tiers":[{"size":"0","files":50000,"depth":4},{"size":"200KB-800KB","files":500000,"depth":4},{"size":"1MB-20MB","files":30000,"depth":4},{"size":"300MB-700MB","files":2000,"depth":4},{"size":"5GB-20GB","files":150,"depth":4}]}
+{"id":"DS-P7-03","name":"Mixed Pipeline: Full (~10 TB)","profile":"dt2_100gbe","tiers":[{"size":"0","files":100000,"depth":4},{"size":"200KB-800KB","files":1000000,"depth":4},{"size":"5MB-50MB","files":60000,"depth":4},{"size":"400MB-1GB","files":6000,"depth":4},{"size":"10GB-30GB","files":200,"depth":4}]}
+{"id":"DS-P8-01","name":"Empty Source Directory","profile":"dt2_100gbe","tiers":[{"size":"0","files":0,"depth":3}]}
+{"id":"DS-P8-02","name":"Single Zero-Byte File","profile":"dt2_100gbe","tiers":[{"size":"0","files":1,"naming":"FN-08","depth":1}]}
+{"id":"DS-P8-03","name":"Single Huge File (100 GB)","profile":"dt2_100gbe","tiers":[{"size":"100GB","files":1,"naming":"FN-07","depth":1}]}
+{"id":"DS-P8-04","name":"Deep Directory Tree (14 levels)","profile":"dt2_100gbe","tiers":[{"size":"100KB-5MB","files":750,"depth":14}]}
+{"id":"DS-P8-05","name":"Unreadable Subdirectory","profile":"dt2_100gbe","tiers":[{"size":"1KB-1MB","files":500,"depth":3}]}
+{"id":"DS-P9-01","name":"Single 1 B (tiny)","profile":"dt2_100gbe","tiers":[{"size":"1","files":1,"naming":"FN-04","depth":1}]}
+{"id":"DS-P9-02","name":"Single 1 MB (tiny->small)","profile":"dt2_100gbe","tiers":[{"size":"1MB","files":1,"naming":"FN-12","depth":1}]}
+{"id":"DS-P9-03","name":"Single 63 MB (below multipart)","profile":"dt2_100gbe","tiers":[{"size":"63MB","files":1,"naming":"FN-16","depth":1}]}
+{"id":"DS-P9-04","name":"Single 64 MB (first multipart)","profile":"dt2_100gbe","tiers":[{"size":"64MB","files":1,"naming":"FN-13","depth":1}]}
+{"id":"DS-P9-05","name":"Single 100 MB (small->medium)","profile":"dt2_100gbe","tiers":[{"size":"100MB","files":1,"naming":"FN-18","depth":1}]}
+{"id":"DS-P9-06","name":"Single 1 GB (medium->large)","profile":"dt2_100gbe","tiers":[{"size":"1GB","files":1,"naming":"FN-08","depth":1}]}
+{"id":"DS-P9-07","name":"Single 100 GB (large)","profile":"dt2_100gbe","tiers":[{"size":"100GB","files":1,"naming":"FN-07","depth":1}]}
+{"id":"DS-P10-01","name":"0B-1MB (zero+tiny) 1M","profile":"dt2_100gbe","tiers":[{"size":"0","files":50000,"depth":3},{"size":"1B-1MB","files":950000,"depth":3}]}
+{"id":"DS-P10-02","name":"1B-10KB sub-tiny 1M","profile":"dt2_100gbe","tiers":[{"size":"1B-10KB","files":1000000,"depth":3}]}
+{"id":"DS-P10-03","name":"10KB-1MB tiny 1M","profile":"dt2_100gbe","tiers":[{"size":"10KB-1MB","files":1000000,"depth":4}]}
+{"id":"DS-P10-04","name":"1MB-4MB small 500K","profile":"dt2_100gbe","tiers":[{"size":"1MB-4MB","files":500000,"depth":3}]}
+{"id":"DS-P10-05","name":"4MB-16MB small 500K","profile":"dt2_100gbe","tiers":[{"size":"4MB-16MB","files":500000,"depth":3}]}
+{"id":"DS-P10-06","name":"Fixed 16MB small 500K","profile":"dt2_100gbe","tiers":[{"size":"16MB","files":500000,"depth":3}]}
+{"id":"DS-P10-07","name":"10GB-120GB large 30","profile":"dt2_100gbe","tiers":[{"size":"10GB-120GB","files":30,"depth":1}]}
+{"id":"DS-P10-08","name":"200GB-500GB large 10","profile":"dt2_100gbe","tiers":[{"size":"200GB-500GB","files":10,"depth":1}]}
+{"id":"DS-P11-01","name":"Weights 7:5:3:1 (~5 TB)","profile":"dt2_100gbe","tiers":[{"size":"10GB-20GB","files":140,"depth":4},{"size":"300MB-700MB","files":3200,"depth":4},{"size":"1MB-10MB","files":188000,"depth":4},{"size":"200KB-600KB","files":780000,"depth":4},{"size":"0","files":7800,"depth":4}]}
+{"id":"DS-P11-02","name":"Weights 9:5:2:0 (~5 TB)","profile":"dt2_100gbe","tiers":[{"size":"10GB-20GB","files":187,"depth":3},{"size":"300MB-700MB","files":3200,"depth":3},{"size":"1MB-10MB","files":125000,"depth":3},{"size":"0","files":1250,"depth":3}]}
+{"id":"DS-P11-03","name":"Weights 10:6:0:0 (~5 TB)","profile":"dt2_100gbe","tiers":[{"size":"10GB-20GB","files":207,"depth":3},{"size":"300MB-700MB","files":3800,"depth":3},{"size":"0","files":40,"depth":3}]}
+{"id":"DS-P12-01","name":"Tiny/Small Heavy 1M","profile":"dt2_100gbe","tiers":[{"size":"0","files":1000,"depth":3},{"size":"200KB-1MB","files":697000,"depth":4},{"size":"1MB-10MB","files":300000,"depth":4},{"size":"300MB-700MB","files":1000,"depth":3},{"size":"1GB-2GB","files":1000,"depth":2}]}
+{"id":"DS-P12-02","name":"Tiny/Small Heavy 2M","profile":"dt2_100gbe","tiers":[{"size":"0","files":1000,"depth":3},{"size":"200KB-1MB","files":1397000,"depth":4},{"size":"1MB-10MB","files":600000,"depth":4},{"size":"300MB-700MB","files":1000,"depth":3},{"size":"1GB-2GB","files":1000,"depth":2}]}

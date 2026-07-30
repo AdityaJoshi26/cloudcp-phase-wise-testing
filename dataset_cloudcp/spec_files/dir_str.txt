@@ -1,0 +1,307 @@
+Note: The tool simplified the command to `python _tree_tmp.py 2>&1 ; Remove-Item _tree_tmp.py` (terminal ID=f41ac968-76d9-4572-a3bf-be55e3189919). This is the output of running that command instead:
+PS C:\Users\LENOVO\Desktop\dataset_cloudcp\spec_files> python _tree_tmp.py 2>&1
+; Remove-Item _tree_tmp.py
+<output-base>/   (replaces /bryck/cloudcp)
+├── DS-P1-01/   (Zero-Tier Pure (Large Scale)  |  5,000,000 files, 10 specs)
+│   └── zero/
+│       └── 0b/   [fn01 … fn10  (10 variants)]  mode=tree
+├── DS-P1-02/   (Tiny-Tier Pure (~500 GB)  |  1,010,000 files, 31 specs)
+│   ├── tiny/
+│   │   ├── 1b_10kb/   [fn01 … fn10  (10 variants)]  mode=tree
+│   │   ├── 10kb_100kb/   [fn01 … fn10  (10 variants)]  mode=tree
+│   │   └── 100kb_1mb/   [fn01 … fn10  (10 variants)]  mode=tree
+│   └── zero/
+│       └── 0b/   [fn01]  mode=tree
+├── DS-P1-03/   (Small-Tier Pure (~5 TB)  |  101,000 files, 31 specs)
+│   ├── small/
+│   │   ├── 1mb_5mb/   [fn01 … fn10  (10 variants)]  mode=flat
+│   │   ├── 5mb_25mb/   [fn01 … fn10  (10 variants)]  mode=tree
+│   │   └── 25mb_100mb/   [fn01 … fn10  (10 variants)]  mode=flat
+│   └── zero/
+│       └── 0b/   [fn01]  mode=flat
+├── DS-P1-04/   (Medium-Tier Pure (~5 TB)  |  10,100 files, 31 specs)
+│   ├── medium/
+│   │   ├── 100mb_250mb/   [fn01 … fn10  (10 variants)]  mode=flat
+│   │   ├── 250mb_700mb/   [fn01 … fn10  (10 variants)]  mode=tree
+│   │   └── 700mb_1gb/   [fn01 … fn10  (10 variants)]  mode=flat
+│   └── zero/
+│       └── 0b/   [fn01]  mode=flat
+├── DS-P1-05/   (Large-Tier Pure (Smoke, ~500 GB)  |  20 files, 20 specs)
+│   └── large/
+│       ├── 5gb_10gb/   [fn01 … fn05  (5 variants)]  mode=flat
+│       ├── 10gb_30gb/   [fn01 … fn10  (10 variants)]  mode=flat
+│       └── 30gb_50gb/   [fn01 … fn05  (5 variants)]  mode=flat
+├── DS-P1-06/   (Large-Tier Pure (Perf baseline, ~10 TB)  |  200 files, 30 specs
+)
+│   └── large/
+│       ├── 5gb_15gb/   [fn01 … fn10  (10 variants)]  mode=tree
+│       ├── 15gb_60gb/   [fn01 … fn10  (10 variants)]  mode=flat
+│       └── 60gb_100gb/   [fn01 … fn10  (10 variants)]  mode=flat
+├── DS-P2-01/   (Boundary Values Probe  |  110 files, 110 specs)
+│   ├── zero/
+│   │   └── 0b/   [fn01 … fn10  (10 variants)]  mode=flat
+│   ├── tiny/
+│   │   ├── 1b/   [fn01 … fn10  (10 variants)]  mode=flat
+│   │   ├── 10kb/   [fn01 … fn10  (10 variants)]  mode=flat
+│   │   └── 977kb/   [fn01 … fn10  (10 variants)]  mode=flat
+│   ├── small/
+│   │   ├── 1mb/   [fn01 … fn10  (10 variants)]  mode=flat
+│   │   ├── 63mb/   [fn01 … fn10  (10 variants)]  mode=flat
+│   │   ├── 64mb/   [fn01 … fn10  (10 variants)]  mode=flat
+│   │   └── 99mb/   [fn01 … fn10  (10 variants)]  mode=flat
+│   ├── medium/
+│   │   ├── 100mb/   [fn01 … fn10  (10 variants)]  mode=flat
+│   │   └── 999mb/   [fn01 … fn10  (10 variants)]  mode=flat
+│   └── large/
+│       └── 1gb/   [fn01 … fn10  (10 variants)]  mode=flat
+├── DS-P2-02/   (Tiny Count-Seal (2001)  |  2,001 files, 10 specs)
+│   └── tiny/
+│       └── 100b/   [fn01 … fn10  (10 variants)]  mode=flat
+├── DS-P2-03/   (Tiny Byte-Seal (260)  |  260 files, 10 specs)
+│   └── tiny/
+│       └── 1mb/   [fn01 … fn10  (10 variants)]  mode=flat
+├── DS-P2-04/   (Small Count-Seal (513)  |  513 files, 10 specs)
+│   └── small/
+│       └── 1mb/   [fn01 … fn10  (10 variants)]  mode=flat
+├── DS-P2-05/   (Medium Count-Seal (65)  |  65 files, 10 specs)
+│   └── medium/
+│       └── 100mb/   [fn01 … fn10  (10 variants)]  mode=flat
+├── DS-P2-06/   (Large Count-Seal (9)  |  9 files, 9 specs)
+│   └── large/
+│       └── 2gb/   [fn01 … fn09  (9 variants)]  mode=flat
+├── DS-P2-07/   (Round-Robin Distribution (800)  |  800 files, 10 specs)
+│   └── tiny/
+│       └── 100kb/   [fn01 … fn10  (10 variants)]  mode=flat
+├── DS-P3-01/   (Large Exhausts First  |  77,406 files, 41 specs)
+│   ├── large/
+│   │   └── 8gb_12gb/   [fn01 … fn10  (10 variants)]  mode=flat
+│   ├── medium/
+│   │   └── 400mb_600mb/   [fn01 … fn10  (10 variants)]  mode=tree
+│   ├── small/
+│   │   └── 1mb_4mb/   [fn01 … fn10  (10 variants)]  mode=tree
+│   ├── tiny/
+│   │   └── 200kb_600kb/   [fn01 … fn10  (10 variants)]  mode=tree
+│   └── zero/
+│       └── 0b/   [fn01]  mode=tree
+├── DS-P3-02/   (Medium Exhausts First  |  76,516 files, 41 specs)
+│   ├── large/
+│   │   └── 8gb_12gb/   [fn01 … fn10  (10 variants)]  mode=flat
+│   ├── medium/
+│   │   └── 400mb_600mb/   [fn01 … fn10  (10 variants)]  mode=flat
+│   ├── small/
+│   │   └── 1mb_4mb/   [fn01 … fn10  (10 variants)]  mode=tree
+│   ├── tiny/
+│   │   └── 200kb_600kb/   [fn01 … fn10  (10 variants)]  mode=tree
+│   └── zero/
+│       └── 0b/   [fn01]  mode=tree
+├── DS-P3-03/   (Small Exhausts First  |  63,204 files, 41 specs)
+│   ├── large/
+│   │   └── 8gb_12gb/   [fn01 … fn10  (10 variants)]  mode=flat
+│   ├── medium/
+│   │   └── 400mb_600mb/   [fn01 … fn10  (10 variants)]  mode=tree
+│   ├── small/
+│   │   └── 1mb_4mb/   [fn01 … fn10  (10 variants)]  mode=flat
+│   ├── tiny/
+│   │   └── 200kb_600kb/   [fn01 … fn10  (10 variants)]  mode=tree
+│   └── zero/
+│       └── 0b/   [fn01]  mode=tree
+├── DS-P3-04/   (Tiny Exhausts First  |  23,000 files, 41 specs)
+│   ├── large/
+│   │   └── 8gb_12gb/   [fn01 … fn10  (10 variants)]  mode=flat
+│   ├── medium/
+│   │   └── 400mb_600mb/   [fn01 … fn10  (10 variants)]  mode=tree
+│   ├── small/
+│   │   └── 1mb_4mb/   [fn01 … fn10  (10 variants)]  mode=tree
+│   ├── tiny/
+│   │   └── 200kb_600kb/   [fn01 … fn10  (10 variants)]  mode=tree
+│   └── zero/
+│       └── 0b/   [fn01]  mode=flat
+├── DS-P3-05/   (Large+Medium Drain Together  |  151,992 files, 39 specs)
+│   ├── large/
+│   │   └── 8gb_12gb/   [fn01 … fn08  (8 variants)]  mode=flat
+│   ├── medium/
+│   │   └── 400mb_600mb/   [fn01 … fn10  (10 variants)]  mode=flat
+│   ├── small/
+│   │   └── 1mb_4mb/   [fn01 … fn10  (10 variants)]  mode=tree
+│   ├── tiny/
+│   │   └── 200kb_600kb/   [fn01 … fn10  (10 variants)]  mode=tree
+│   └── zero/
+│       └── 0b/   [fn01]  mode=tree
+├── DS-P3-06/   (Only Tiny Remains  |  404,584 files, 39 specs)
+│   ├── large/
+│   │   └── 8gb_12gb/   [fn01 … fn08  (8 variants)]  mode=flat
+│   ├── medium/
+│   │   └── 400mb_600mb/   [fn01 … fn10  (10 variants)]  mode=flat
+│   ├── small/
+│   │   └── 1mb_4mb/   [fn01 … fn10  (10 variants)]  mode=flat
+│   ├── tiny/
+│   │   └── 200kb_600kb/   [fn01 … fn10  (10 variants)]  mode=tree
+│   └── zero/
+│       └── 0b/   [fn01]  mode=tree
+├── DS-P4-01/   (Filename Stress: Tiny  |  20,000 files, 20 specs)
+│   └── tiny/
+│       └── 512kb/   [fn01 … fn20  (20 variants)]  mode=flat
+├── DS-P4-02/   (Filename Stress: Small  |  4,800 files, 20 specs)
+│   └── small/
+│       └── 10mb/   [fn01 … fn20  (20 variants)]  mode=flat
+├── DS-P4-03/   (Filename Stress: Medium  |  400 files, 20 specs)
+│   └── medium/
+│       └── 200mb/   [fn01 … fn20  (20 variants)]  mode=flat
+├── DS-P4-04/   (Filename Stress: Large  |  100 files, 20 specs)
+│   └── large/
+│       └── 2gb/   [fn01 … fn20  (20 variants)]  mode=flat
+├── DS-P4-05/   (Filename Stress: Cross-Tier  |  12,550 files, 81 specs)
+│   ├── tiny/
+│   │   └── 512kb/   [fn01 … fn20  (20 variants)]  mode=tree
+│   ├── small/
+│   │   └── 10mb/   [fn01 … fn20  (20 variants)]  mode=tree
+│   ├── medium/
+│   │   └── 200mb/   [fn01 … fn20  (20 variants)]  mode=tree
+│   ├── large/
+│   │   └── 2gb/   [fn01 … fn20  (20 variants)]  mode=flat
+│   └── zero/
+│       └── 0b/   [fn01]  mode=tree
+├── DS-P5-01/   (All File Types, All Tiers  |  32,110 files, 100 specs)
+│   ├── zero/
+│   │   └── 0b/   [fn01 … fn20  (20 variants)]  mode=flat
+│   ├── tiny/
+│   │   └── 100kb_1mb/   [fn01 … fn20  (20 variants)]  mode=flat
+│   ├── small/
+│   │   └── 1mb_50mb/   [fn01 … fn20  (20 variants)]  mode=flat
+│   ├── medium/
+│   │   └── 100mb_800mb/   [fn01 … fn20  (20 variants)]  mode=flat
+│   └── large/
+│       └── 2gb_20gb/   [fn01 … fn20  (20 variants)]  mode=flat
+├── DS-P6-01/   (Profile Comparison (All Tiers)  |  71,140 files, 41 specs)
+│   ├── tiny/
+│   │   └── 200kb_600kb/   [fn01 … fn10  (10 variants)]  mode=tree
+│   ├── small/
+│   │   └── 1mb_10mb/   [fn01 … fn10  (10 variants)]  mode=tree
+│   ├── medium/
+│   │   └── 200mb_400mb/   [fn01 … fn10  (10 variants)]  mode=flat
+│   ├── large/
+│   │   └── 3gb_8gb/   [fn01 … fn10  (10 variants)]  mode=flat
+│   └── zero/
+│       └── 0b/   [fn01]  mode=tree
+├── DS-P7-01/   (Mixed Pipeline: Small (~300 GB)  |  91,320 files, 50 specs)
+│   ├── zero/
+│   │   └── 0b/   [fn01 … fn10  (10 variants)]  mode=tree
+│   ├── tiny/
+│   │   └── 200kb_800kb/   [fn01 … fn10  (10 variants)]  mode=tree
+│   ├── small/
+│   │   └── 1mb_10mb/   [fn01 … fn10  (10 variants)]  mode=tree
+│   ├── medium/
+│   │   └── 200mb_400mb/   [fn01 … fn10  (10 variants)]  mode=flat
+│   └── large/
+│       └── 5gb_12gb/   [fn01 … fn10  (10 variants)]  mode=flat
+├── DS-P7-02/   (Mixed Pipeline: Medium (~3 TB)  |  582,150 files, 50 specs)
+│   ├── zero/
+│   │   └── 0b/   [fn01 … fn10  (10 variants)]  mode=tree
+│   ├── tiny/
+│   │   └── 200kb_800kb/   [fn01 … fn10  (10 variants)]  mode=tree
+│   ├── small/
+│   │   └── 1mb_20mb/   [fn01 … fn10  (10 variants)]  mode=flat
+│   ├── medium/
+│   │   └── 300mb_700mb/   [fn01 … fn10  (10 variants)]  mode=flat
+│   └── large/
+│       └── 5gb_20gb/   [fn01 … fn10  (10 variants)]  mode=flat
+├── DS-P7-03/   (Mixed Pipeline: Full (~10 TB)  |  1,166,200 files, 50 specs)
+│   ├── zero/
+│   │   └── 0b/   [fn01 … fn10  (10 variants)]  mode=tree
+│   ├── tiny/
+│   │   └── 200kb_800kb/   [fn01 … fn10  (10 variants)]  mode=tree
+│   ├── small/
+│   │   └── 5mb_50mb/   [fn01 … fn10  (10 variants)]  mode=tree
+│   ├── medium/
+│   │   └── 400mb_1gb/   [fn01 … fn10  (10 variants)]  mode=flat
+│   └── large/
+│       └── 10gb_30gb/   [fn01 … fn10  (10 variants)]  mode=flat
+├── DS-P8-01/   (Empty Source Directory  |  0 files, 1 specs)
+│   └── empty/
+│       └── -/   [empty]  mode=tree
+├── DS-P8-02/   (Single Zero-Byte File  |  1 files, 1 specs)
+│   └── zero/
+│       └── 0b/   [fn08]  mode=flat
+├── DS-P8-03/   (Single Huge File (100 GB)  |  1 files, 1 specs)
+│   └── large/
+│       └── 100gb/   [fn07]  mode=flat
+├── DS-P8-04/   (Deep Directory Tree (14 levels)  |  700 files, 10 specs)
+│   └── tiny/
+│       └── 100kb_5mb/   [fn01 … fn10  (10 variants)]  mode=tree
+├── DS-P8-05/   (Unreadable Subdirectory  |  500 files, 10 specs)
+│   └── tiny/
+│       └── 1kb_1mb/   [fn01 … fn10  (10 variants)]  mode=flat
+├── DS-P9-01/   (Single 1 B (tiny)  |  1 files, 1 specs)
+│   └── tiny/
+│       └── 1b/   [fn04]  mode=flat
+├── DS-P9-02/   (Single 1 MB (tiny->small)  |  1 files, 1 specs)
+│   └── small/
+│       └── 1mb/   [fn12]  mode=flat
+├── DS-P9-03/   (Single 63 MB (below multipart)  |  1 files, 1 specs)
+│   └── small/
+│       └── 63mb/   [fn16]  mode=flat
+├── DS-P9-04/   (Single 64 MB (first multipart)  |  1 files, 1 specs)
+│   └── small/
+│       └── 64mb/   [fn13]  mode=flat
+├── DS-P9-05/   (Single 100 MB (small->medium)  |  1 files, 1 specs)
+│   └── medium/
+│       └── 100mb/   [fn18]  mode=flat
+├── DS-P9-06/   (Single 1 GB (medium->large)  |  1 files, 1 specs)
+│   └── large/
+│       └── 1gb/   [fn08]  mode=flat
+├── DS-P9-07/   (Single 100 GB (large)  |  1 files, 1 specs)
+│   └── large/
+│       └── 100gb/   [fn07]  mode=flat
+├── DS-P10-01/   (0B-1MB (zero+tiny) 1M  |  1,000,000 files, 40 specs)
+│   ├── zero/
+│   │   └── 0b/   [fn01 … fn20  (20 variants)]  mode=tree
+│   └── tiny/
+│       └── 1b_1mb/   [fn01 … fn20  (20 variants)]  mode=tree
+├── DS-P10-02/   (1B-10KB sub-tiny 1M  |  1,000,000 files, 20 specs)
+│   └── tiny/
+│       └── 1b_10kb/   [fn01 … fn20  (20 variants)]  mode=tree
+├── DS-P10-03/   (10KB-1MB tiny 1M  |  1,000,000 files, 20 specs)
+│   └── tiny/
+│       └── 10kb_1mb/   [fn01 … fn20  (20 variants)]  mode=tree
+├── DS-P10-04/   (1MB-4MB small 500K  |  500,000 files, 20 specs)
+│   └── small/
+│       └── 1mb_4mb/   [fn01 … fn20  (20 variants)]  mode=tree
+├── DS-P10-05/   (4MB-16MB small 500K  |  500,000 files, 20 specs)
+│   └── small/
+│       └── 4mb_16mb/   [fn01 … fn20  (20 variants)]  mode=tree
+├── DS-P10-06/   (Fixed 16MB small 500K  |  500,000 files, 20 specs)
+│   └── small/
+│       └── 16mb/   [fn01 … fn20  (20 variants)]  mode=tree
+├── DS-P10-07/   (10GB-120GB large 30  |  30 files, 20 specs)
+│   └── large/
+│       └── 10gb_120gb/   [fn01 … fn20  (20 variants)]  mode=flat
+├── DS-P10-08/   (200GB-500GB large 10  |  10 files, 10 specs)
+│   └── large/
+│       └── 200gb_500gb/   [fn01 … fn10  (10 variants)]  mode=flat
+├── DS-P11-01/   (Weights 7:5:3:1 (~5 TB)  |  979,140 files, 81 specs)
+│   ├── large/
+│   │   └── 10gb_20gb/   [fn01 … fn20  (20 variants)]  mode=flat
+│   ├── medium/
+│   │   └── 300mb_700mb/   [fn01 … fn20  (20 variants)]  mode=tree
+│   ├── small/
+│   │   └── 1mb_10mb/   [fn01 … fn20  (20 variants)]  mode=flat
+│   ├── tiny/
+│   │   └── 200kb_600kb/   [fn01 … fn20  (20 variants)]  mode=flat
+│   └── zero/
+│       └── 0b/   [fn01]  mode=flat
+├── DS-P11-02/   (Weights 9:5:2:0 (~5 TB)  |  129,637 files, 61 specs)
+│   ├── large/
+│   │   └── 10gb_20gb/   [fn01 … fn20  (20 variants)]  mode=flat
+│   ├── medium/
+│   │   └── 300mb_700mb/   [fn01 … fn20  (20 variants)]  mode=tree
+│   ├── small/
+│   │   └── 1mb_10mb/   [fn01 … fn20  (20 variants)]  mode=tree
+│   └── zero/
+│       └── 0b/   [fn01]  mode=tree
+└── DS-P11-03/   (Weights 10:6:0:0 (~5 TB)  |  4,047 files, 41 specs)
+    ├── large/
+    │   └── 10gb_20gb/   [fn01 … fn20  (20 variants)]  mode=flat
+    ├── medium/
+    │   └── 300mb_700mb/   [fn01 … fn20  (20 variants)]  mode=flat
+    └── zero/
+        └── 0b/   [fn01]  mode=tree
