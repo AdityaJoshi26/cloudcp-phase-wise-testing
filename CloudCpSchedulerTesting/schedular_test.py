@@ -5,7 +5,7 @@ schedular_test.py — end-to-end scheduler/broker test harness (standalone).
 Runs on the Linux bryck host. For each selected deterministic-enumeration dataset
 (SCH-ORD-01..12 / SCH-DEEP-01..03) it:
 
-  1. materialises the data by invoking `datagen --spec-file <L*.yaml>` on every
+  1. materialises the data by invoking `datagen --spec <L*.yaml>` on every
      per-level spec under spec_files/<ID>/ in BFS chain order (L0 -> L4);
   2. records the ground-truth enumeration order to enumeration_order.json;
   3. allocates the next transfer id (max existing transfer_* in the batchmeta dir + 1)
@@ -38,7 +38,7 @@ Common options (all have host-sensible defaults):
     --data-root PATH       default: /bryck/cloudcp_sched_data
     --s3-base URI          default: s3://aditya/sch_test
     --datagen PATH         default: /home/bryck/rperiyas/datagen
-    --datagen-flag FLAG    default: --spec-file
+    --datagen-flag FLAG    default: --spec 
     --batchmeta-dir PATH   default: /opt/bryck/bryckapi/downloads/bcloud_batchmeta
     --transfer-logs-dir P  default: /opt/bryck/bryckapi/downloads/cloud_transfer_logs
     --scheduler-python P   default: /opt/bryck/.venv/bryck/bin/python3
@@ -74,7 +74,7 @@ LOG = logging.getLogger("schedular_test")
 
 # ---- host defaults -------------------------------------------------------------------
 DEF_DATAGEN = "/home/bryck/rperiyas/datagen"
-DEF_DATAGEN_FLAG = "--spec-file"
+DEF_DATAGEN_FLAG = "--spec"
 DEF_DATA_ROOT = "/bryck/cloudcp_sched_data"
 DEF_S3_BASE = "s3://aditya/sch_test"
 DEF_BATCHMETA = "/opt/bryck/bryckapi/downloads/bcloud_batchmeta"
