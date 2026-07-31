@@ -209,7 +209,82 @@ LD_LIBRARY_PATH=/opt/bryck/aws/lib/; /opt/bryck/aws/bin/cloudcp \
 
 ---
 
-## 7. `batch_summary` expectation helper (to be added)
+## 7. `schedular_test.py` — scheduler/broker end-to-end runner + replay
+
+Location: [../CloudCpSchedulerTesting/schedular_test.py](../CloudCpSchedulerTesting/schedular_test.py)
+
+Standalone Phase-2 host harness for the deterministic-enumeration catalog (`SCH-ORD-01…12`,
+`SCH-DEEP-01…03`). Per dataset it: runs `datagen --spec-file` on each per-level spec in BFS chain
+order (L0→L4); records the enumeration oracle to `enumeration_order.json`; allocates the next
+transfer id (`max(transfer_*)+1` under the batchmeta dir) and creates `transfer_<id>`; starts a
+`sudo journalctl -t bryckcloud` follower **before** launching the scheduler (lead settle) and keeps
+capturing **after** it exits (drain) so no head/tail lines are lost; runs `batch_scheduler.py` and
+waits for exit; fetches the results CSV; and renders a self-contained HTML **replay** of
+`Pending-<id>` / `Running with workers` / `free workers` over time plus a completion histogram.
+Everything is zipped to `sch_test_<id>.zip`. A range or `--all` produces a per-dataset zip **each**
+plus a **combined** report/zip.
+
+> Assumes the `spec_files/<ID>/` specs already exist — it does **not** call `generate_dataset.py`;
+> it drives `datagen` directly.
+
+```text
+usage: schedular_test.py [dataset] [--from N] [--to N] [--all]
+                         [--spec-dir DIR] [--data-root PATH] [--s3-base URI]
+                         [--datagen PATH] [--datagen-flag FLAG]
+                         [--batchmeta-dir PATH] [--transfer-logs-dir PATH]
+                         [--scheduler-python PATH] [--scheduler-script PATH]
+                         [--dir-path PATH] [--endpoint-url URL] [--config PATH]
+                         [--journal-tag TAG] [--capture-lead SEC] [--capture-drain SEC]
+                         [--out-dir PATH] [--poll-interval SEC] [--skip-datagen] [--dry-run] [-v]
+
+  dataset            number (1..15) or id (SCH-ORD-07 / DEEP-02)
+  --from/--to        inclusive dataset-number range
+  --all              every dataset (each zip + a combined report)
+  --capture-lead     settle the journalctl follower before the scheduler (default 3s)
+  --capture-drain    keep capturing after the scheduler exits (default 6s)
+  --skip-datagen     reuse already-materialised data
+  --dry-run          print external commands only; touch nothing
+```
+
+Examples:
+
+```bash
+cd CloudCpSchedulerTesting
+python3 schedular_test.py 7                 # single dataset
+python3 schedular_test.py SCH-DEEP-02
+python3 schedular_test.py --from 1 --to 5   # inclusive range
+python3 schedular_test.py --all             # all + combined
+python3 schedular_test.py 1 --dry-run       # preview (safe off-host)
+```
+
+Scheduler invocation (what the harness runs; fixed pieces mirror the host layout):
+
+```bash
+/opt/bryck/.venv/bryck/bin/python3 \
+  /opt/bryck/.venv/bryck/lib/python3.10/site-packages/bryckcloud/lib/cloud/batch_scheduler.py \
+  <transfer-id> upload /bryck/cloudcp_sched_data/<ID> s3://aditya/sch_test/<ID> \
+  /bryck/cloudcp_sched_data/<ID> \
+  --transfer-dir /opt/bryck/bryckapi/downloads/bcloud_batchmeta/transfer_<transfer-id> \
+  --dir-path /opt/bryck/.venv/bryck/lib/python3.10/site-packages/bryckcloud/lib/cloud \
+  --endpoint-url https://10.10.10.103:9000
+```
+
+- Output per run (under `CloudCpSchedulerTesting/sch_test_runs/report_<id>/`, zipped to
+  `sch_test_<id>.zip`): `report.html` (animated replay + histograms), `enumeration_order.json`,
+  `logs/{pending,free_workers,running_workers,raw}_<id>.log`, `transfer_report_<id>.csv`,
+  `run_meta.json`, `summary.txt`.
+- Results CSV source:
+  `/opt/bryck/bryckapi/downloads/cloud_transfer_logs/cloud_transfer_<id>/transfer_report_<id>.csv`.
+- Tier names/sizes read from `/etc/bryck/bryckcloud/config.json` `BATCH.*` (embedded fallback).
+
+> **Status:** captures and replays the Group B slot signals (per-tier in-flight, free workers,
+> pending backlog) and records the enumeration oracle. Pass/fail **assertions** for `SCH-SD-*`
+> (weight ratio, caps, refill, work-stealing), the `SCH-EN-*`/`SCH-BA-*` oracle checks, and the
+> `SCH-CF-*` config cases are **still to be added**.
+
+---
+
+## 8. `batch_summary` expectation helper (to be added)
 
 A small Python helper that reads [../dataset_cloudcp/spec_files/manifest.json](../dataset_cloudcp/spec_files/manifest.json)
 plus the active `BATCH.*` config and emits the **expected** `batch_summary.csv` (per-tier
@@ -227,12 +302,12 @@ usage: batch_summary_expect.py --dataset DS-Pn-nn --config /etc/bryck/bryckcloud
 
 ---
 
-## 8. Quick Reference — which tool per phase
+## 9. Quick Reference — which tool per phase
 
 | Phase | Primary tools |
 |---|---|
 | Batch Builder | `datagen`, `generate_specs.py`, `bcloud_src_enum.py --batch-only`, `dataset_validator.py`, `batch_summary_expect.py` (TBA) |
-| Scheduler | broker (config `NETWORK_PROFILE`), slot sampler (TBA) |
+| Scheduler | `generate_dataset.py`, `schedular_test.py` (runner + slot/replay capture), broker (config `NETWORK_PROFILE`); slot-ratio/cap assertions (TBA) |
 | CloudCP Binary | `make_batches.py`, `run_cloudcp_tests.py`, `cloudcp` |
 | Reporting | verification engine, `dataset_validator.py` (counts), status-injection fixtures (TBA) |
 | Fallback | fault-injection proxy (TBA), fallback worker |

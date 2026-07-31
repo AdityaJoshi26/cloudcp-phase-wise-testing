@@ -124,11 +124,19 @@ Generate with
 ## 4. Tools
 
 - Broker with `NETWORK_PROFILE` set in `/etc/bryck/bryckcloud/config.json`.
+- **`schedular_test.py`** — end-to-end runner + slot/replay capture harness
+  ([../../CloudCpSchedulerTesting/schedular_test.py](../../CloudCpSchedulerTesting/schedular_test.py)):
+  drives `datagen` → `batch_scheduler.py`, captures per-tier `Pending`/`Running with workers`/
+  `free workers` from journald (lead/drain bracketed), records the enumeration oracle, and renders
+  a self-contained HTML replay + completion histogram, zipped to `sch_test_<id>.zip`. Covers the
+  **capture** side of the slot sampler; verdicts still TBA (below). See
+  [../tools_guide.md](../tools_guide.md) §7.
 - **Enumeration-order validator** — asserts `source.index` is tier-contiguous in chain order with
   the manifest's per-tier counts (**TBA**).
 - **Batch-shape validator** — asserts per-tier `batches.created` counts and `(nfiles, nbytes)`
   shapes match the oracle (design doc §2.1/§6) (**TBA**).
-- **Slot sampler** — polls in-flight batch counts per tier every N seconds (**TBA**).
+- **Slot sampler** — `schedular_test.py` captures per-tier in-flight / free / pending over time;
+  ratio/cap/convergence **assertions** against the profile weights are **TBA**.
 - **Batch-hash differ** — hashes `pending/` batch files across two profile runs (**TBA**).
 
 See [../tools_guide.md](../tools_guide.md).
@@ -139,7 +147,9 @@ See [../tools_guide.md](../tools_guide.md).
 
 - Oracle-validation harness (source.index tier-contiguity + batch count/shape vs manifest;
   finish()-flush aware per design doc §3.2).
-- Slot-distribution sampling harness (per-tier in-flight over time → ratio + convergence).
+- Slot-distribution **assertions** on top of `schedular_test.py`'s captured time-series (per-tier
+  in-flight → weight ratio ±5%, `max_concurrent` caps, same-tier refill ≥80%, work-stealing,
+  3-cycle convergence). Capture + replay is implemented; the verdict layer is pending.
 - Profile-diff automation (run same dataset under 2 profiles, assert identical batch hashes,
   different schedules).
 - Performance capture (PUT/sec, bandwidth %, CPU) for P2 cases (requires `--content random` builds).
