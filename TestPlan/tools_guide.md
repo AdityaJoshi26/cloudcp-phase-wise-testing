@@ -198,7 +198,7 @@ python run_cloudcp_tests.py --all --dry-run
 Direct cloudcp invocation (what the orchestrator runs):
 
 ```bash
-LD_LIBRARY_PATH=/opt/bryck/aws/lib/ /opt/bryck/aws/bin/cloudcp \
+LD_LIBRARY_PATH=/opt/bryck/aws/lib/; /opt/bryck/aws/bin/cloudcp \
   "/opt/bryck/bryckapi/downloads/bcloud_batchmeta/transfer_103/batches/inprogress/small/batch_001611.txt" \
   --bucket aditya \
   --fs-prefix /bryck/1mb_halfmill \

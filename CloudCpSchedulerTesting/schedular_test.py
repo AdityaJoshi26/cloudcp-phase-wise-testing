@@ -48,6 +48,8 @@ Common options (all have host-sensible defaults):
     --config PATH          default: /etc/bryck/bryckcloud/config.json (for BATCH tiers)
     --out-dir PATH         default: <this dir>/sch_test_runs
     --poll-interval SEC    forwarded to batch_scheduler.py if set
+    --capture-lead SEC     settle the journalctl follower before the scheduler (default 3)
+    --capture-drain SEC    keep capturing after the scheduler exits (default 6)
     --skip-datagen         reuse already-materialised data
     --dry-run              print external commands without executing
 """
@@ -67,6 +69,7 @@ import signal
 import subprocess
 import sys
 import threading
+import time
 import zipfile
 from pathlib import Path
 
@@ -88,6 +91,10 @@ DEF_DIR_PATH = "/opt/bryck/.venv/bryck/lib/python3.10/site-packages/bryckcloud/l
 DEF_ENDPOINT = "https://10.10.10.103:9000"
 DEF_CONFIG = "/etc/bryck/bryckcloud/config.json"
 DEF_JOURNAL_TAG = "bryckcloud"
+# journal capture margins: start the follower before the scheduler and keep it
+# running after the scheduler exits so no head/tail lines are missed.
+DEF_CAPTURE_LEAD = 3   # seconds: settle the follower before launching the scheduler
+DEF_CAPTURE_DRAIN = 6  # seconds: keep capturing after the scheduler exits
 
 # Embedded fallback if /etc config is unreadable (mirrors the BATCH block).
 FALLBACK_BATCH = {
@@ -278,10 +285,13 @@ def create_transfer_dir(batchmeta_dir: str, tr_id: int, dry_run: bool) -> Path:
 class JournalCapture:
     """Single `sudo journalctl -f` follower fanned into 3 filtered files + a raw log."""
 
-    def __init__(self, tag: str, tr_id: int, log_dir: Path, since: _dt.datetime, dry_run: bool):
+    def __init__(self, tag: str, tr_id: int, log_dir: Path, since: _dt.datetime, dry_run: bool,
+                 lead_sec: float = DEF_CAPTURE_LEAD, drain_sec: float = DEF_CAPTURE_DRAIN):
         self.tag = tag
         self.tr_id = tr_id
         self.dry_run = dry_run
+        self.lead_sec = lead_sec
+        self.drain_sec = drain_sec
         self.pending_path = log_dir / f"pending_{tr_id}.log"
         self.free_path = log_dir / f"free_workers_{tr_id}.log"
         self.running_path = log_dir / f"running_workers_{tr_id}.log"
@@ -292,12 +302,15 @@ class JournalCapture:
         self._stop = threading.Event()
 
     def start(self) -> None:
+        """Spawn the follower and block until it is attached (lead settle)."""
         for p in (self.pending_path, self.free_path, self.running_path, self.raw_path):
             p.write_text("", encoding="utf-8")
         if self.dry_run:
             LOG.info("[dry-run] would start journalctl follower for tag %s", self.tag)
             return
-        since = self._since.strftime("%Y-%m-%d %H:%M:%S")
+        # Backdate --since by the lead margin so the very first lines are never missed.
+        since_dt = self._since - _dt.timedelta(seconds=max(self.lead_sec, 1))
+        since = since_dt.strftime("%Y-%m-%d %H:%M:%S")
         cmd = ["sudo", "journalctl", "-f", "-t", self.tag, "--since", since, "-o", "short"]
         LOG.info("$ %s", " ".join(cmd))
         self._proc = subprocess.Popen(
@@ -306,6 +319,10 @@ class JournalCapture:
         )
         self._thread = threading.Thread(target=self._reader, daemon=True)
         self._thread.start()
+        # Give journalctl time to attach and start following before the scheduler runs.
+        if self.lead_sec > 0:
+            LOG.info("capture lead: waiting %.1fs for journalctl to attach", self.lead_sec)
+            time.sleep(self.lead_sec)
 
     def _reader(self) -> None:
         pend = self.pending_path.open("a", encoding="utf-8")
@@ -335,9 +352,14 @@ class JournalCapture:
                 fh.close()
 
     def stop(self) -> None:
-        self._stop.set()
         if self.dry_run or self._proc is None:
+            self._stop.set()
             return
+        # Drain: keep capturing after the scheduler exits so late/tail lines land.
+        if self.drain_sec > 0:
+            LOG.info("capture drain: keeping journalctl open %.1fs for tail logs", self.drain_sec)
+            time.sleep(self.drain_sec)
+        self._stop.set()
         try:
             os.killpg(os.getpgid(self._proc.pid), signal.SIGTERM)
         except ProcessLookupError:
@@ -865,9 +887,10 @@ def run_one(dataset: dict, args, spec_dir: Path, batch_cfg: dict, tier_order: li
     dst = f"{args.s3_base.rstrip('/')}/{ds_id}"
     base_src = src
 
-    # 4. journal capture
+    # 4. journal capture (starts BEFORE the scheduler; lead settle + post-exit drain)
     start_dt = _dt.datetime.now()
-    cap = JournalCapture(args.journal_tag, tr_id, log_dir, start_dt, args.dry_run)
+    cap = JournalCapture(args.journal_tag, tr_id, log_dir, start_dt, args.dry_run,
+                         lead_sec=args.capture_lead, drain_sec=args.capture_drain)
     cap.start()
 
     # 5. scheduler (blocks until transfer complete)
@@ -875,7 +898,7 @@ def run_one(dataset: dict, args, spec_dir: Path, batch_cfg: dict, tier_order: li
     sched_rc = run_scheduler(cmd, args.dry_run)
     end_dt = _dt.datetime.now()
 
-    # stop capture
+    # stop capture (drains tail logs first)
     cap.stop()
 
     year = start_dt.year
@@ -1058,6 +1081,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     ap.add_argument("--endpoint-url", default=DEF_ENDPOINT)
     ap.add_argument("--config", default=DEF_CONFIG, help="config.json for BATCH tiers")
     ap.add_argument("--journal-tag", default=DEF_JOURNAL_TAG)
+    ap.add_argument("--capture-lead", type=float, default=DEF_CAPTURE_LEAD,
+                    help="seconds to settle the journalctl follower before the scheduler starts")
+    ap.add_argument("--capture-drain", type=float, default=DEF_CAPTURE_DRAIN,
+                    help="seconds to keep capturing after the scheduler exits")
     ap.add_argument("--out-dir", default=None, help="output root (default: <script>/sch_test_runs)")
     ap.add_argument("--poll-interval", type=int, default=None)
     ap.add_argument("--skip-datagen", action="store_true")
