@@ -26,6 +26,9 @@ Examples
     # the negative / malformed-batch suite (B01-B12)
     python run_cloudcp_tests.py --negative
 
+    # only the extended-attribute (xattr) case (N12-N16)
+    python run_cloudcp_tests.py --xattr
+
     # everything: all positive datasets + the negative suite
     python run_cloudcp_tests.py --all
 
@@ -180,6 +183,9 @@ NEGATIVE_BATCH_INFO = {
     "bad_batch_whitespace_only": "A record consisting only of whitespace.",
     "bad_batch_mixed_valid_invalid": "Alternating valid and non-existent paths, "
                                      "testing the partial-success contract.",
+    "batch_xattr": "Valid files carrying hostile / edge extended attributes "
+                   "(valid, oversized >64 KiB, binary, many, bad-checksum); "
+                   "tests the xattr-to-object-metadata policy, not batch framing.",
 }
 
 # Human summary of the two negative scenarios for the report narrative.
@@ -199,6 +205,16 @@ NEGATIVE_SCENARIO_INFO = {
         "purpose": "Proves that every valid file listed before the corruption "
                    "still uploads successfully, and the uploader handles the "
                    "corruption gracefully instead of failing the whole job.",
+    },
+    "negative_C_xattr": {
+        "title": "Scenario C — Extended-attribute metadata",
+        "summary": "Valid files carrying hostile / edge extended attributes "
+                   "(valid, oversized, binary, many, bad-checksum) are uploaded "
+                   "via batch_xattr.txt.",
+        "purpose": "Proves the uploader handles user.* xattr metadata safely: it "
+                   "must not hang or crash reading the attributes. The "
+                   "preserve-vs-drop policy and byte-exact round-trip are then "
+                   "confirmed against the stored object metadata.",
     },
 }
 
@@ -697,10 +713,11 @@ def validate_positive_csv(csv_path, expected_records, logger):
 # ---------------------------------------------------------------------------
 
 def run_negative_suite(args, run_ctx, logger):
-    """Run both negative scenarios and return their combined result records."""
+    """Run every negative scenario and return their combined result records."""
     results = []
     results.extend(run_negative_scenario_a(args, run_ctx, logger))
     results.extend(run_negative_scenario_b(args, run_ctx, logger))
+    results.extend(run_negative_scenario_c(args, run_ctx, logger))
     return results
 
 
@@ -814,6 +831,57 @@ def run_negative_case(batch_file, neg_data, args, run_ctx, logger):
         "errors": problems,
         "description": NEGATIVE_BATCH_INFO.get(case_id, "Malformed batch input."),
     }
+
+
+# ---------------------------------------------------------------------------
+# Scenario C: extended-attribute (xattr) metadata (N12-N16)
+# ---------------------------------------------------------------------------
+
+def run_negative_scenario_c(args, run_ctx, logger):
+    logger.log("=" * 70)
+    logger.log("NEGATIVE SCENARIO C: extended-attribute metadata (N12-N16)")
+
+    c_root = os.path.join(run_ctx["dir"], "negative_xattr")
+    os.makedirs(c_root, exist_ok=True)
+
+    r = run_cmd([sys.executable, MAKE_BATCHES, "--negative", "-o", c_root],
+                logger, dry_run=args.dry_run,
+                stdout_path=os.path.join(c_root, "make_batches_negative.stdout"),
+                stderr_path=os.path.join(c_root, "make_batches_negative.stderr"))
+    if not args.dry_run and r["rc"] != 0:
+        return [{"kind": "negative", "dataset": "negative_C_xattr", "status": "FAIL",
+                 "errors": ["make_batches --negative failed (rc={})".format(r["rc"])],
+                 "cases": []}]
+
+    neg_data = os.path.join(c_root, "negative_data")
+    xattr_batch = os.path.join(c_root, "negative_batches", "batch_xattr.txt")
+    scn = NEGATIVE_SCENARIO_INFO["negative_C_xattr"]
+
+    if args.dry_run:
+        logger.log("(dry-run) would run cloudcp against " + xattr_batch)
+        return [{"kind": "negative", "dataset": "negative_C_xattr",
+                 "status": "DRY_RUN", "errors": [], "cases": []}]
+
+    # xattr is Linux-only on an xattr-capable fs; make_batches skips it elsewhere.
+    if not os.path.isfile(xattr_batch):
+        logger.log("batch_xattr.txt not produced; xattr unsupported on this fs/OS", "ERROR")
+        return [{"kind": "negative", "dataset": "negative_C_xattr",
+                 "title": scn["title"], "summary": scn["summary"], "purpose": scn["purpose"],
+                 "status": "SKIP",
+                 "errors": ["batch_xattr.txt not produced (no xattr-capable fs / non-Linux)"],
+                 "counts": {"cases": 0, "passed": 0, "failed": 0}, "cases": []}]
+
+    cases = [run_negative_case(xattr_batch, neg_data, args, run_ctx, logger)]
+    passed = sum(1 for c in cases if c["status"] == "PASS")
+    overall = "PASS" if passed == len(cases) else "FAIL"
+    return [{
+        "kind": "negative", "dataset": "negative_C_xattr",
+        "title": scn["title"], "summary": scn["summary"], "purpose": scn["purpose"],
+        "status": overall, "errors": [],
+        "counts": {"cases": len(cases), "passed": passed,
+                   "failed": len(cases) - passed},
+        "cases": cases,
+    }]
 
 
 # ---------------------------------------------------------------------------
@@ -1069,7 +1137,7 @@ def render_markdown(report):
     negatives = [r for r in results if r["kind"] == "negative"]
 
     total = len(results)
-    passed = sum(1 for r in results if r["status"] in ("PASS", "DRY_RUN"))
+    passed = sum(1 for r in results if r["status"] in ("PASS", "DRY_RUN", "SKIP"))
     failed = total - passed
     overall = "PASSED" if failed == 0 else "ATTENTION REQUIRED"
     is_dry = report.get("dry_run")
@@ -1282,6 +1350,8 @@ def build_parser():
     sel.add_argument("--to", type=int, help="End of an inclusive spec-number range.")
     sel.add_argument("--negative", action="store_true",
                      help="Run the negative / malformed-batch suite (B01-B12).")
+    sel.add_argument("--xattr", action="store_true",
+                     help="Run only the extended-attribute (xattr) case (N12-N16).")
     sel.add_argument("--all", action="store_true",
                      help="Run every positive dataset AND the negative suite.")
     sel.add_argument("--list", action="store_true",
@@ -1314,6 +1384,8 @@ def confirm_or_abort(datasets, args):
         return
     names = ", ".join(d.name for d in datasets) or "(none)"
     extra = " + negative suite" if (args.negative or args.all) else ""
+    if args.xattr and not extra:
+        extra = " + xattr case"
     print("About to run REAL datagen + cloudcp + bucket clears for:")
     print("  {}{}".format(names, extra))
     print("  bucket=s3://{}  endpoint={}".format(args.bucket, args.endpoint_url))
@@ -1334,13 +1406,15 @@ def main(argv=None):
             print("  #{:<3} {:<22} mode={:<8} expected={:<9} root={}".format(
                 d.number, d.name, d.mode or "?", exp, d.root))
         print("\nNegative suite: --negative (malformed batches B01-B12)")
+        print("Xattr case:     --xattr (extended-attribute metadata N12-N16)")
         return 0
 
     # Decide what runs. --negative alone => only negative. Otherwise positive
     # selection (default = all positive). --all => all positive + negative.
-    run_negative = args.negative or args.all
-    if args.negative and not (args.all or args.dataset or
-                              args.from_ is not None or args.to is not None):
+    run_negative = args.negative or args.all or args.xattr
+    negative_only = (args.negative or args.xattr) and not (
+        args.all or args.dataset or args.from_ is not None or args.to is not None)
+    if negative_only:
         positive = []
     else:
         positive = select_datasets(all_datasets, args)
@@ -1377,13 +1451,15 @@ def main(argv=None):
     try:
         for ds in positive:
             results.append(run_positive_dataset(ds, args, run_ctx, logger))
-        if run_negative:
+        if args.xattr and not (args.negative or args.all):
+            results.extend(run_negative_scenario_c(args, run_ctx, logger))
+        elif run_negative:
             results.extend(run_negative_suite(args, run_ctx, logger))
     finally:
         write_reports(run_ctx, args, results, logger)
 
     elapsed = time.time() - t0
-    passed = sum(1 for r in results if r["status"] in ("PASS", "DRY_RUN"))
+    passed = sum(1 for r in results if r["status"] in ("PASS", "DRY_RUN", "SKIP"))
     failed = len(results) - passed
     logger.log("=" * 70)
     logger.log("DONE in {:.1f}s: {} passed, {} failed, {} total".format(
