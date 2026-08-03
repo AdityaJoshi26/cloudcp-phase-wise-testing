@@ -33,6 +33,11 @@ Usage
     python3 schedular_test.py --from 1 --to 5   # inclusive range
     python3 schedular_test.py --all             # all datasets, each + combined
 
+Negative (scheduler-level fault injection; see schedular_negative_test.py):
+    python3 schedular_test.py --negative-list    # list negative cases
+    python3 schedular_test.py --negative         # run the whole negative suite
+    python3 schedular_test.py --negative-case NEG-ENUM-03
+
 Common options (all have host-sensible defaults):
     --spec-dir PATH        default: <this dir>/spec_files
     --data-root PATH       default: /bryck/cloudcp_sched_data
@@ -51,6 +56,7 @@ Common options (all have host-sensible defaults):
     --capture-lead SEC     settle the journalctl follower before the scheduler (default 3)
     --capture-drain SEC    keep capturing after the scheduler exits (default 6)
     --skip-datagen         reuse already-materialised data
+    --delete               after the run, delete the materialised data dir (<data-root>/<id>)
     --dry-run              print external commands without executing
 """
 
@@ -277,6 +283,18 @@ def create_transfer_dir(batchmeta_dir: str, tr_id: int, dry_run: bool) -> Path:
     if not dry_run:
         p.mkdir(parents=True, exist_ok=True)
     return p
+
+
+def cleanup_data_dir(src: str, dry_run: bool) -> None:
+    """Remove the materialised data dir created under the data-root (--delete)."""
+    p = Path(src)
+    LOG.info("--delete: removing materialised data dir %s", p)
+    if dry_run:
+        return
+    if p.is_dir():
+        shutil.rmtree(p, ignore_errors=True)
+    else:
+        LOG.warning("data dir not found, nothing to delete: %s", p)
 
 
 # =====================================================================================
@@ -541,8 +559,38 @@ def _histogram(values: list[float], nbins: int = 40) -> dict:
     return {"bins": bins, "counts": counts, "width": width, "lo": lo, "hi": hi}
 
 
+def build_structure_payload(dataset: dict) -> dict:
+    """Directory structure, per-tier file sizes and the enumeration expectation.
+
+    Built from the manifest's per-level metadata (BFS chain order L0->L4), so it
+    documents exactly what datagen materialises and the order the single-process
+    BFS walker will enumerate each size-tier.
+    """
+    levels = []
+    for lv in dataset.get("levels", []):
+        num = int(lv.get("num_files", 0) or 0)
+        sz = int(lv.get("size_bytes", 0) or 0)
+        levels.append({
+            "level": lv.get("level"),
+            "tier": (lv.get("tier") or "").lower(),
+            "root": lv.get("root"),
+            "num_files": num,
+            "file_size_bytes": sz,
+            "total_bytes": num * sz,
+            "batches": lv.get("batches"),
+            "content": lv.get("content"),
+            "seed": lv.get("seed"),
+        })
+    return {
+        "levels": levels,
+        "total_files": sum(l["num_files"] for l in levels),
+        "total_bytes": sum(l["total_bytes"] for l in levels),
+        "enumeration_order": [t.lower() for t in dataset.get("enumeration_order", [])],
+    }
+
+
 def build_report_payload(dataset, tr_id, enum_payload, cap_data, csv_summary,
-                         meta, batch_cfg, tier_order) -> dict:
+                         meta, batch_cfg, tier_order, structure) -> dict:
     tiers = list(dict.fromkeys(tier_order + cap_data.get("tiers_seen", [])))
     return {
         "meta": meta,
@@ -552,6 +600,7 @@ def build_report_payload(dataset, tr_id, enum_payload, cap_data, csv_summary,
         },
         "transfer_id": tr_id,
         "enumeration_order": enum_payload["enumeration_order"],
+        "structure": structure,
         "tiers": tiers,
         "tier_colors": {t: TIER_COLORS.get(t, "#9b59b6") for t in tiers},
         "batch_config": {k.lower(): v for k, v in batch_cfg.items()},
@@ -600,6 +649,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   table{width:100%;border-collapse:collapse;font-size:13px}
   th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line)}
   th{color:var(--mut);font-weight:600}
+  .tree{background:#0b0f14;border:1px solid var(--line);border-radius:8px;padding:14px;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:12px;line-height:1.6;overflow:auto;white-space:pre}
+  .enumexp{display:flex;flex-direction:column;gap:8px;margin-top:6px}
+  .enumexp .step{display:flex;align-items:center;gap:10px;background:#0b0f14;border:1px solid var(--line);border-radius:8px;padding:8px 12px;font-size:13px}
+  .enumexp .ord{width:22px;height:22px;border-radius:50%;background:#21262d;color:var(--fg);display:inline-flex;align-items:center;justify-content:center;font-weight:700;font-size:12px}
   @media(max-width:760px){.row{grid-template-columns:1fr}}
 </style>
 </head>
@@ -613,6 +666,28 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   <section>
     <h2>Summary</h2>
     <div class="grid" id="summaryGrid"></div>
+  </section>
+
+  <section>
+    <h2>Dataset structure &amp; enumeration expectation</h2>
+    <div class="sub" id="structTotals"></div>
+    <div class="row">
+      <div>
+        <div class="muted">Directory chain (BFS L0 → L4)</div>
+        <pre id="dirTree" class="tree"></pre>
+      </div>
+      <div>
+        <div class="muted">Enumeration expectation (order the BFS walker drains size-tiers)</div>
+        <div id="enumExp" class="enumexp"></div>
+      </div>
+    </div>
+    <table id="structTbl" style="margin-top:14px">
+      <thead><tr>
+        <th>Ord</th><th>Level</th><th>Tier</th><th>Directory</th>
+        <th>Files</th><th>File size</th><th>Total size</th><th>Batches</th><th>Content</th>
+      </tr></thead>
+      <tbody></tbody>
+    </table>
   </section>
 
   <section>
@@ -713,6 +788,39 @@ Object.entries(cs.status_counts||{}).forEach(([s,c])=>{
 // legend
 const lg=document.getElementById('legend');
 TIERS.forEach(t=>{lg.innerHTML+='<span><i class="dot" style="background:'+(COL[t]||'#888')+'"></i>'+t+'</span>';});
+
+// ---- dataset structure & enumeration expectation ----
+const ST=DATA.structure||{levels:[],enumeration_order:[]};
+document.getElementById('structTotals').textContent =
+  (ST.levels||[]).length + ' levels · ' + fmt(ST.total_files||0) + ' files · ' + bytes(ST.total_bytes||0) + ' logical';
+const dirTree=document.getElementById('dirTree');
+let treeStr='';
+(ST.levels||[]).forEach(l=>{
+  const name=(l.root||'').split('/').pop()||l.root||'';
+  const branch = l.level===0 ? '' : '  '.repeat(l.level-1)+'└─ ';
+  treeStr += branch + name + '/'
+    + '   ['+l.tier+' × '+fmt(l.num_files)+' @ '+bytes(l.file_size_bytes)
+    + ' = '+bytes(l.total_bytes)+', '+l.batches+' batches, '+(l.content||'-')+']\n';
+});
+dirTree.textContent = treeStr || '(no structure metadata)';
+const enumExp=document.getElementById('enumExp');
+(ST.enumeration_order||[]).forEach((t,i)=>{
+  const lv=(ST.levels||[]).find(x=>x.tier===t)||{};
+  enumExp.innerHTML += '<div class="step"><span class="ord">'+(i+1)+'</span>'
+    + '<i class="dot" style="background:'+(COL[t]||'#888')+'"></i>'
+    + '<b>'+t+'</b><span class="muted">'+fmt(lv.num_files||0)+' files · '
+    + bytes(lv.file_size_bytes||0)+' each · '+(lv.batches||0)+' batches</span></div>';
+});
+const stbody=document.querySelector('#structTbl tbody');
+(ST.levels||[]).forEach((l,i)=>{
+  stbody.innerHTML += '<tr>'
+    + '<td>'+(i+1)+'</td><td>L'+l.level+'</td>'
+    + '<td><i class="dot" style="background:'+(COL[l.tier]||'#888')+'"></i> '+l.tier+'</td>'
+    + '<td class="muted">'+(l.root||'')+'</td>'
+    + '<td>'+fmt(l.num_files)+'</td><td>'+bytes(l.file_size_bytes)+'</td>'
+    + '<td>'+bytes(l.total_bytes)+'</td><td>'+(l.batches!=null?l.batches:'-')+'</td>'
+    + '<td>'+(l.content||'-')+'</td></tr>';
+});
 
 // ---- canvas helpers ----
 function prep(cv){const r=window.devicePixelRatio||1;const w=cv.clientWidth;const h=cv.height;
@@ -934,16 +1042,21 @@ def run_one(dataset: dict, args, spec_dir: Path, batch_cfg: dict, tier_order: li
     (report_dir / "run_meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
 
     # 7. html + summary
+    structure = build_structure_payload(dataset)
     payload = build_report_payload(dataset, tr_id, enum_payload, cap_data, csv_summary,
-                                   meta, batch_cfg, tier_order)
+                                   meta, batch_cfg, tier_order, structure)
     render_html(payload, report_dir / "report.html")
-    write_summary_txt(report_dir / "summary.txt", meta, enum_payload, cap_data, csv_summary)
+    write_summary_txt(report_dir / "summary.txt", meta, enum_payload, cap_data, csv_summary, structure)
 
     # 9. zip
     zip_path = out_root / f"sch_test_{tr_id}.zip"
     if zip_path.exists():
         zip_path.unlink()
     zip_dir(report_dir, zip_path)
+
+    # 10. optional cleanup of the materialised data dir
+    if args.delete:
+        cleanup_data_dir(src, args.dry_run)
 
     return {
         "dataset_id": ds_id, "transfer_id": tr_id, "meta": meta,
@@ -952,7 +1065,15 @@ def run_one(dataset: dict, args, spec_dir: Path, batch_cfg: dict, tier_order: li
     }
 
 
-def write_summary_txt(path: Path, meta, enum_payload, cap_data, csv_summary) -> None:
+def write_summary_txt(path: Path, meta, enum_payload, cap_data, csv_summary, structure) -> None:
+    def _bytes(n: int) -> str:
+        x = float(n)
+        for u in ("B", "KB", "MB", "GB", "TB"):
+            if x < 1024 or u == "TB":
+                return f"{x:.2f} {u}" if x < 10 else f"{x:.0f} {u}"
+            x /= 1024
+        return f"{n} B"
+
     lines = [
         "Scheduler Test Summary",
         "=" * 60,
@@ -966,6 +1087,18 @@ def write_summary_txt(path: Path, meta, enum_payload, cap_data, csv_summary) -> 
         f"end              : {meta['end']}",
         f"duration (s)     : {meta['duration_sec']}",
         f"scheduler exit   : {meta['scheduler_exit']}",
+        "",
+        "Dataset structure (BFS chain L0->L4):",
+        f"  total files    : {structure['total_files']}",
+        f"  total bytes    : {_bytes(structure['total_bytes'])}",
+    ]
+    for i, lv in enumerate(structure["levels"], 1):
+        lines.append(
+            f"  {i}. L{lv['level']} {lv['tier']:<6} "
+            f"{lv['num_files']:>8} files x {_bytes(lv['file_size_bytes']):>10} "
+            f"= {_bytes(lv['total_bytes']):>10}  ({lv['batches']} batches)  {lv['root']}"
+        )
+    lines += [
         "",
         "Results (CSV):",
         f"  total files    : {csv_summary['total']}",
@@ -1088,6 +1221,16 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     ap.add_argument("--out-dir", default=None, help="output root (default: <script>/sch_test_runs)")
     ap.add_argument("--poll-interval", type=int, default=None)
     ap.add_argument("--skip-datagen", action="store_true")
+    ap.add_argument("--delete", action="store_true",
+                    help="after the run, delete the materialised data dir (<data-root>/<id>)")
+    ap.add_argument("--negative", action="store_true",
+                    help="run the scheduler-level negative test suite (all cases)")
+    ap.add_argument("--negative-case", default=None,
+                    help="run specific negative case id(s), comma-separated (e.g. NEG-ENUM-03)")
+    ap.add_argument("--negative-list", action="store_true",
+                    help="list the negative test cases and exit")
+    ap.add_argument("--neg-timeout", type=int, default=None,
+                    help="per-negative-case wall-clock bound in seconds")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("-v", "--verbose", action="store_true")
     return ap.parse_args(argv)
@@ -1100,6 +1243,16 @@ def main(argv: list[str]) -> int:
         format="%(asctime)s %(levelname)-7s %(message)s",
         datefmt="%H:%M:%S",
     )
+
+    # Negative test suite is a separate harness; delegate before the positive flow.
+    if args.negative_list or args.negative or args.negative_case:
+        import schedular_negative_test as neg
+        if args.negative_list:
+            for c in neg.CASES:
+                tag = " (POSIX-only)" if c.posix_only else ""
+                print(f"{c.id:<13} {c.group:<12} {c.title}{tag}")
+            return 0
+        return neg.run_from_args(args)
 
     here = Path(__file__).resolve().parent
     spec_dir = Path(args.spec_dir) if args.spec_dir else here / "spec_files"

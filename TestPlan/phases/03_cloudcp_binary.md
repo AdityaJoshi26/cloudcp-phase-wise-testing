@@ -83,10 +83,14 @@ errors; clean exit-code contract.
 | Group | IDs | Coverage |
 |---|---|---|
 | Hostile filesystem objects | N01–N11 | broken symlink, symlink→file/dir, unreadable (`chmod 000`), FIFO, 0-byte, spaces, newline/CR, non-UTF-8, ~255-byte name, ~PATH_MAX path |
+| Hostile extended attributes | N12–N16 | valid user xattr, oversized (>64 KiB) value, non-UTF-8/binary value, many (64) xattrs, corrupted checksum-style attr (Linux-only; via `batch_xattr.txt`) |
 | Malformed batch framing | B01–B12 | empty, missing terminator, double/leading/only NULs, dangling paths, directory entry, CRLF paths, non-UTF-8, over-long path, whitespace-only, mixed valid/invalid |
 
 Pass: valid records in a mixed batch (B12) still succeed; invalid ones reported; exit code
-reflects partial vs total failure.
+reflects partial vs total failure. **Xattr (N12–N16):** per the confirmed policy — preserved
+metadata round-trips byte-exact with size limits enforced and bad checksums caught/ignored, **or**
+xattrs are ignored and object bytes still upload cleanly; no case crashes reading an attribute
+(see [plan_cp_binary.md §4c](../../CloudCpBinaryTesting/plan_cp_binary.md)).
 
 ### 3.5 Configuration (P0)
 

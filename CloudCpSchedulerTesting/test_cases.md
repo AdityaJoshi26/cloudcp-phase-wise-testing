@@ -86,6 +86,42 @@ cycles.
 
 ---
 
+## Group D — Negative / Fault Injection (P1)
+
+Scheduler-level fault injection, driven by
+[schedular_negative_test.py](schedular_negative_test.py) (`schedular_test.py --negative`). Every
+case runs in a **private throwaway sandbox** (`neg_<id>/{data,batchmeta,logs}`) with tiny
+synthesised data — **no machine config, creds, or the real `/opt` batchmeta are touched**. A PASS
+means the fault was correctly produced *and* the scheduler handled it as specified (a controlled
+failure is a pass). Transport / auth / config-loading faults (bad endpoint, bad creds, network
+drop, missing/malformed config, xattr) intentionally live in the CLI / binary suites, not here.
+
+| ID | Group | Injected fault | Pass when |
+|---|---|---|---|
+| NEG-ENUM-01 | enumeration | Source root absent | Exits non-zero cleanly; no orphan `transfer_<id>` |
+| NEG-ENUM-02 | enumeration | Empty root + empty level dir | 0 batches, clean completion (`csv_total == 0`) |
+| NEG-ENUM-03 | enumeration | One file `chmod 000` | That file `FAILED`; the tier's other files `SUCCESS` |
+| NEG-ENUM-04 | enumeration | A level dir `chmod 000` | Level skipped; no crash/hang |
+| NEG-ENUM-05 | enumeration | Files unlinked mid-walk (timing) | Vanished entries tolerated; no crash |
+| NEG-ENUM-06 | enumeration | Cyclic symlinks | BFS terminates (no infinite walk) |
+| NEG-ENUM-07 | enumeration | Dangling symlink | Skipped; enumeration order preserved |
+| NEG-BATCH-01 | batch | One file > tier `TARGET_SIZE_MB` (sparse) | Closes a single-file size-capped batch; that file `SUCCESS` |
+| NEG-BATCH-03 | batch | Fewer files than one block | Partial batch flushed at `finish()`; all `SUCCESS` |
+| NEG-META-01 | batchmeta | Transfer-dir `chmod 0500` | Metadata write fails fast with a clear non-zero error |
+| NEG-META-02 | batchmeta | Malformed batchmeta pre-seeded | Reject or repair; no crash |
+| NEG-META-03 | batchmeta | Stale `transfer_<id>` present | Safe bump or clean failure |
+| NEG-SCHED-01 | scheduling | `--poll-interval 0` | No tight-loop / div-by-zero; run completes within bound |
+| NEG-SCHED-02 | scheduling | One huge stalled batch (best-effort) | Free-worker accounting holds; other tiers progress |
+| NEG-LIFE-01 | lifecycle | SIGINT mid-run | Clean shutdown; capture drained; partial CSV parses |
+| NEG-LIFE-02 | lifecycle | Kill then re-run same id + transfer-dir | Idempotent resume, no duplicate uploads (needs scheduler resume support) |
+
+> POSIX-only faults (chmod / symlink / signals) auto-**SKIP** on non-POSIX hosts and under
+> `--dry-run`. `NEG-META-02` and `NEG-LIFE-02` depend on scheduler-side reject/repair and resume
+> support respectively; their expectations are encoded but only pass if the scheduler implements
+> them.
+
+---
+
 ## Traceability
 
 | Requirement (design doc §9) | Test cases |
@@ -95,6 +131,7 @@ cycles.
 | §9.3 finish()-flush caveat | SCH-BA-03 |
 | §9.4 Scheduler dispatch under test | SCH-SD-01 … SCH-SD-07 |
 | R1 homogeneous-dir invariance | SCH-EN-03 |
+| Robustness / fault handling | SCH-CF-04, NEG-ENUM-*, NEG-BATCH-*, NEG-META-*, NEG-SCHED-*, NEG-LIFE-* |
 
 ## Notes
 
@@ -105,3 +142,8 @@ cycles.
 - Group A is throughput-agnostic: run MEDIUM/LARGE as `sparse` (manifest default) to keep disk
   footprint near zero. For real throughput measurement (P2), regenerate with
   `generate_dataset.py … --content random`.
+- Group D (negative) never mutates the machine: it builds and tears down its own sandbox per case,
+  restores permissions before cleanup, and injects faults only via the sandbox filesystem, CLI
+  overrides, child-process env, and signals — **no config, creds, or services on the host are
+  changed**. Run it with `python schedular_test.py --negative` (`--negative-list` to enumerate,
+  `--negative-case <ID>` for one).

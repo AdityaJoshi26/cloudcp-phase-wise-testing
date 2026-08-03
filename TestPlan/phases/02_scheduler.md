@@ -99,6 +99,26 @@ cycles.
 | SCH-CF-04 | `PARALLEL_WORKERS` | `0` | Refuses to start; clear error |
 | SCH-CF-05 | `BATCH_BUILDER_ONLY` | `true` | Batches built to `pending/`; no cloudcp spawned; pending set matches oracle |
 
+### 2.5 Negative / Fault Injection (P1 — robustness)
+
+Sandboxed scheduler fault injection: every case builds and tears down its own
+`neg_<id>/{data,batchmeta,logs}` throwaway tree with tiny synthesised data and injects faults only
+via the sandbox filesystem, CLI overrides, child env, and signals — **no host config, creds, or
+services are changed**. A controlled failure is a pass. Transport / auth / config-loading / xattr
+faults live in the CLI and binary phases, not here. Full case table:
+[../../CloudCpSchedulerTesting/test_cases.md](../../CloudCpSchedulerTesting/test_cases.md#group-d--negative--fault-injection-p1).
+
+| Group | IDs | Coverage |
+|---|---|---|
+| Enumeration | NEG-ENUM-01 … 07 | missing/empty root, unreadable file/dir, delete-mid-walk, symlink loop, dangling symlink |
+| Batch | NEG-BATCH-01, 03 | oversized single file, sub-block partial flush |
+| Batchmeta | NEG-META-01 … 03 | read-only transfer-dir, corrupt batchmeta, stale id collision |
+| Scheduling | NEG-SCHED-01, 02 | zero poll-interval, stalled batch (best-effort) |
+| Lifecycle | NEG-LIFE-01, 02 | SIGINT mid-run, resume after kill |
+
+Run with `python schedular_test.py --negative` (`--negative-list` to enumerate, `--negative-case
+<ID>` for one). POSIX-only faults auto-SKIP off-POSIX and under `--dry-run`.
+
 ---
 
 ## 3. Datasets Used
@@ -129,8 +149,12 @@ Generate with
   drives `datagen` → `batch_scheduler.py`, captures per-tier `Pending`/`Running with workers`/
   `free workers` from journald (lead/drain bracketed), records the enumeration oracle, and renders
   a self-contained HTML replay + completion histogram, zipped to `sch_test_<id>.zip`. Covers the
-  **capture** side of the slot sampler; verdicts still TBA (below). See
-  [../tools_guide.md](../tools_guide.md) §7.
+  **capture** side of the slot sampler; verdicts still TBA (below). Also exposes `--delete` to drop
+  the `/bryck/<id>` data dir after a run. See [../tools_guide.md](../tools_guide.md) §7.
+- **`schedular_negative_test.py`** — sandboxed scheduler fault-injection harness (§2.5)
+  ([../../CloudCpSchedulerTesting/schedular_negative_test.py](../../CloudCpSchedulerTesting/schedular_negative_test.py)):
+  runs the NEG-* cases, each in a private throwaway sandbox with permission restore on teardown, and
+  renders a PASS/FAIL/SKIP HTML report. Invoked via `schedular_test.py --negative`.
 - **Enumeration-order validator** — asserts `source.index` is tier-contiguous in chain order with
   the manifest's per-tier counts (**TBA**).
 - **Batch-shape validator** — asserts per-tier `batches.created` counts and `(nfiles, nbytes)`

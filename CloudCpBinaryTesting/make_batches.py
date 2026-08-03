@@ -12,9 +12,10 @@ so it is the only safe record delimiter (same idea as `find -print0`).
 
 Negative mode (-n / --negative): datagen cannot produce corrupt / hostile
 artifacts, so this mode builds them here -- a tree of hostile filesystem
-objects (broken symlinks, unreadable files, FIFOs, weird names) plus a set of
-deliberately malformed batch files (bad framing, dangling paths, etc.). These
-feed the cloudcp negative test cases (see plan_cp_binary.md).
+objects (broken symlinks, unreadable files, FIFOs, weird names, hostile
+extended attributes) plus a set of deliberately malformed batch files (bad
+framing, dangling paths, etc.). These feed the cloudcp negative test cases
+(see plan_cp_binary.md).
 
 Usage:
     python make_batches.py /path/to/dir
@@ -198,6 +199,54 @@ def build_negative_files(data_dir):
     except OSError as e:
         _skip("N09_nonutf8", e)
 
+    # N12-N16: extended-attribute (xattr) cases. The FILE is valid and
+    # transferable; the negative aspect is hostile/edge metadata. Linux-only
+    # (os.setxattr) and needs an xattr-capable fs (ext4/xfs with user_xattr).
+    if hasattr(os, "setxattr"):
+        # N12: one valid user xattr — baseline preserve/drop/round-trip policy.
+        try:
+            p = _write_file(os.path.join(ddir, b"n12_xattr_valid.bin"), 2048)
+            os.setxattr(p, b"user.cloudcp.test", b"ok")
+            rec("N12_xattr_valid", p)
+        except OSError as e:
+            _skip("N12_xattr_valid", e)
+
+        # N13: oversized xattr value (>64 KiB) — object user-metadata size limit.
+        try:
+            p = _write_file(os.path.join(ddir, b"n13_xattr_oversized.bin"), 2048)
+            os.setxattr(p, b"user.cloudcp.big", b"A" * (64 * 1024 + 1))
+            rec("N13_xattr_oversized", p)
+        except OSError as e:
+            _skip("N13_xattr_oversized", e)
+
+        # N14: non-UTF-8 / binary xattr value — metadata encoding round-trip.
+        try:
+            p = _write_file(os.path.join(ddir, b"n14_xattr_binary.bin"), 2048)
+            os.setxattr(p, b"user.cloudcp.bin", b"\xff\xfe\x00\x80bad")
+            rec("N14_xattr_binary", p)
+        except OSError as e:
+            _skip("N14_xattr_binary", e)
+
+        # N15: many xattrs on one file — bulk metadata mapping / total-size cap.
+        try:
+            p = _write_file(os.path.join(ddir, b"n15_xattr_many.bin"), 2048)
+            for i in range(64):
+                os.setxattr(p, ("user.cloudcp.k%02d" % i).encode(), b"v")
+            rec("N15_xattr_many", p)
+        except OSError as e:
+            _skip("N15_xattr_many", e)
+
+        # N16: corrupted checksum-style xattr — a mismatch must be caught or
+        # explicitly ignored, never silently trusted.
+        try:
+            p = _write_file(os.path.join(ddir, b"n16_xattr_bad_checksum.bin"), 4096)
+            os.setxattr(p, b"user.cloudcp.sha256", b"deadbeef_not_a_real_hash")
+            rec("N16_xattr_bad_checksum", p)
+        except OSError as e:
+            _skip("N16_xattr_bad_checksum", e)
+    else:
+        _skip("N12-N16 (xattr)", "os.setxattr unavailable (non-Linux host)")
+
     return created
 
 
@@ -267,6 +316,12 @@ def build_negative_batches(batch_dir, data_dir, created):
         os.path.join(ddir, b"missing_1.bin") + b"\0" +
         good2 + b"\0" +
         os.path.join(ddir, b"missing_2.bin") + b"\0")
+
+    # Xattr batch: well-framed, valid files whose METADATA is hostile (N12-N16).
+    # cloudcp uploads them normally; validation checks the xattr policy, not framing.
+    xattr_paths = [pb for lbl, pb in by_label.items() if "xattr" in lbl]
+    if xattr_paths:
+        raw("batch_xattr.txt", b"".join(pb + b"\0" for pb in xattr_paths))
 
 
 def run_negative(output_dir):

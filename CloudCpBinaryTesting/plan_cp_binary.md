@@ -110,10 +110,17 @@ malformed batch files. Each is a distinct, independently runnable test case.
 | N09  | Non-UTF-8 / surrogate-escape name| Byte-exact round-trip, no decode crash.                  |
 | N10  | Very long name (~255 bytes)     | Handled up to `NAME_MAX`; graceful error beyond.          |
 | N11  | Very deep / long path (~PATH_MAX)| Handled up to `PATH_MAX`; graceful error beyond.         |
+| N12  | Valid user xattr (`user.cloudcp.test`) | Defined policy: preserved as object user-metadata or dropped; round-trips byte-exact if preserved. |
+| N13  | Oversized xattr value (>64 KiB) | Object user-metadata size limit enforced; graceful error, not a crash. |
+| N14  | Non-UTF-8 / binary xattr value  | Byte-exact metadata round-trip or clean rejection; no decode crash. |
+| N15  | Many xattrs on one file (64)    | Bulk metadata mapping / total-size cap handled; no partial silent loss. |
+| N16  | Corrupted checksum-style xattr (`user.cloudcp.sha256`) | Mismatch is caught (file `MISMATCH`/error) or explicitly ignored — never silently trusted. |
 
 (POSIX-only objects — symlinks, FIFO, `chmod 000`, newline/non-UTF-8 names — are
 created on Linux/macOS; on Windows they are skipped with a logged notice, since
-`cloudcp` itself runs on Linux.)
+`cloudcp` itself runs on Linux. The **xattr** cases N12–N16 are **Linux-only**
+(`os.setxattr`) and require an xattr-capable filesystem — ext4/xfs mounted with
+`user_xattr`; they are skipped with a notice elsewhere.)
 
 ### 4b. Malformed / hostile batch files (framing tests)
 
@@ -136,6 +143,24 @@ Expected overall: `cloudcp` reports per-record errors, keeps a clean exit-code
 contract, never crashes/segfaults, and (for B12) transfers the valid records
 while reporting the invalid ones.
 
+### 4c. Extended-attribute (xattr) cases (metadata semantics)
+
+Unlike the framing tests, the xattr objects (N12–N16) are **valid, transferable
+files**; the hostile part is their extended-attribute metadata. `make_batches.py
+--negative` writes a well-framed `batch_xattr.txt` listing them so `cloudcp`
+uploads them normally and validation asserts the **xattr policy** rather than
+framing:
+
+- If `cloudcp` **preserves** xattrs (maps `user.*` → object user-metadata),
+  N12/N14 must round-trip byte-exact, N13/N15 must enforce the size limits
+  gracefully, and N16 must catch or explicitly ignore a bad checksum attr.
+- If `cloudcp` **ignores** xattrs, every N12–N16 file must still upload cleanly
+  with correct object bytes (the metadata is simply not carried), and no case may
+  crash on reading the attribute.
+
+This is Linux-only (`os.setxattr`) on an xattr-capable fs; on other hosts the
+cases are skipped with a notice.
+
 ---
 
 ## 5. Proposed Directory Layout
@@ -157,7 +182,7 @@ CloudcpBinaryTesting/
     11_mixed_realistic.yaml
   batches/                  # (generated) make_batches.py output, positive
   negative_data/            # (generated) make_batches.py --negative files
-  negative_batches/         # (generated) malformed batch files
+  negative_batches/         # (generated) malformed batch files + batch_xattr.txt
 ```
 
 ---
@@ -192,6 +217,10 @@ python make_batches.py --negative -o CloudcpBinaryTesting
   attributable error; valid records in a mixed batch still succeed; exit code
   reflects partial vs total failure per the binary's contract.
 - **Encoding:** unicode/space/newline/non-UTF-8 names round-trip byte-exact.
+- **Xattr:** per the confirmed policy (§4c) — either preserved metadata
+  round-trips byte-exact (N12/N14) with size limits enforced (N13/N15) and bad
+  checksums caught/ignored (N16), or xattrs are ignored and object bytes still
+  upload cleanly; no case crashes reading an attribute.
 - **Tiers:** files land in the expected tier and use the expected
   single-part vs multipart path around the 8 MiB cutoff.
 
@@ -208,6 +237,9 @@ python make_batches.py --negative -o CloudcpBinaryTesting
    expected results.)
 4. Desired total scale (file counts) — current counts are moderate for a smoke
    run; say the word to scale up for load testing.
+5. Does `cloudcp` **preserve extended attributes** (map `user.*` xattrs to object
+   user-metadata) or ignore them? This selects the expected results for the
+   xattr cases N12–N16 (§4c).
 ```
 
 ---

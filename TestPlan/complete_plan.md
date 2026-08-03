@@ -209,8 +209,8 @@ tracks what assets exist today versus what is still to be added. Each phase doc 
 | Phase | Existing assets | To be added |
 |---|---|---|
 | Batch Builder | Test plan ([phases/01](phases/01_batch_builder.md)); generation via [dataset_validator.py](../dataset_cloudcp/spec_files/dataset_validator.py); catalog + manifest | Automated expected-vs-actual `batch_summary.csv` comparator; full 54-dataset run harness; config-matrix runs |
-| Scheduler | Test plan ([phases/02](phases/02_scheduler.md)); weight-shift datasets (cat 3, 6, 11) | Slot-sampling harness; profile-diff automation; convergence measurement |
-| CloudCP Binary | **Complete binary suite** in [CloudCpBinaryTesting/](../CloudCpBinaryTesting/) (`plan_cp_binary.md`, `run_cloudcp_tests.py`, `make_batches.py`, positive + negative datasets) | Integrate into master harness; wire to broker-produced batches |
+| Scheduler | Test plan ([phases/02](phases/02_scheduler.md)); weight-shift datasets (cat 3, 6, 11); sandboxed negative harness [schedular_negative_test.py](../CloudCpSchedulerTesting/schedular_negative_test.py) (NEG-* fault injection) | Slot-sampling verdict layer; profile-diff automation; convergence measurement |
+| CloudCP Binary | **Complete binary suite** in [CloudCpBinaryTesting/](../CloudCpBinaryTesting/) (`plan_cp_binary.md`, `run_cloudcp_tests.py`, `make_batches.py`, positive + negative datasets incl. hostile fs objects N01–N11 and xattr-metadata cases N12–N16) | Integrate into master harness; wire to broker-produced batches; confirm xattr preserve/drop policy |
 | Reporting | Test plan ([phases/04](phases/04_reporting.md)); [planv2.md](../docs/planv2.md) Phase 4 | Injected-status fixtures; CSV/JSON assertion harness |
 | Fallback | Test plan ([phases/05](phases/05_fallback.md)); [planv2.md](../docs/planv2.md) Phase 3 | Fault-injection proxy; `.lst` drain harness |
 | Complete Functional | Test plan ([phases/06](phases/06_complete_functional.md)) | End-to-end runner spanning all stages |
