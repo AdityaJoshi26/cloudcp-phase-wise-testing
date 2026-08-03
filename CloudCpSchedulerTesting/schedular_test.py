@@ -12,7 +12,8 @@ Runs on the Linux bryck host. For each selected deterministic-enumeration datase
      and creates transfer_<id>;
   4. starts a journalctl follower and fans matching lines into three log files
      (Pending-<id>, "free workers", "Running with workers") plus a raw log,
-     stamping the test start;
+     stamping the test start; concurrently tails cloudcp.log (--cloudcp-log)
+     into cloudcplogs.txt for the same initiation -> completion window;
   5. runs batch_scheduler.py and waits for it to exit (exit 0 == transfer complete),
      stamping the test completion;
   6. fetches the per-file results CSV
@@ -46,6 +47,7 @@ Common options (all have host-sensible defaults):
     --datagen-flag FLAG    default: --spec 
     --batchmeta-dir PATH   default: /opt/bryck/bryckapi/downloads/bcloud_batchmeta
     --transfer-logs-dir P  default: /opt/bryck/bryckapi/downloads/cloud_transfer_logs
+    --cloudcp-log PATH     default: <transfer-logs-dir>/cloudcp.log (tailed to cloudcplogs.txt)
     --scheduler-python P   default: /opt/bryck/.venv/bryck/bin/python3
     --scheduler-script P   default: .../site-packages/bryckcloud/lib/cloud/batch_scheduler.py
     --dir-path PATH        default: .../site-packages/bryckcloud/lib/cloud
@@ -90,6 +92,7 @@ DEF_DATA_ROOT = "/bryck/cloudcp_sched_data"
 DEF_S3_BASE = "s3://aditya/sch_test"
 DEF_BATCHMETA = "/opt/bryck/bryckapi/downloads/bcloud_batchmeta"
 DEF_TRANSFER_LOGS = "/opt/bryck/bryckapi/downloads/cloud_transfer_logs"
+DEF_CLOUDCP_LOG = "/opt/bryck/bryckapi/downloads/cloud_transfer_logs/cloudcp.log"
 DEF_SCHED_PY = "/opt/bryck/.venv/bryck/bin/python3"
 DEF_SCHED_SCRIPT = (
     "/opt/bryck/.venv/bryck/lib/python3.10/site-packages/"
@@ -418,6 +421,76 @@ class JournalCapture:
                 pass
         if self._thread:
             self._thread.join(timeout=5)
+
+
+class CloudcpLogCapture:
+    """Tail the shared cloudcp.log into cloudcplogs.txt across the test window.
+
+    Spawned just before JournalCapture.start() (whose lead settle covers this tail
+    too) and stopped right after JournalCapture.stop() (whose drain already elapsed),
+    so it records exactly the initiation -> completion window.
+    """
+
+    def __init__(self, log_path: str, out_path: Path, dry_run: bool):
+        self.log_path = log_path
+        self.out_path = out_path
+        self.dry_run = dry_run
+        self._proc: subprocess.Popen | None = None
+        self._thread: threading.Thread | None = None
+        self._stop = threading.Event()
+
+    def start(self) -> None:
+        """Spawn `tail -F -n 0` on cloudcp.log (only lines from now onward)."""
+        self.out_path.write_text("", encoding="utf-8")
+        if self.dry_run:
+            LOG.info("[dry-run] would tail %s -> %s", self.log_path, self.out_path.name)
+            return
+        # -F retries if the file is rotated/absent; -n 0 starts from the current end.
+        cmd = ["sudo", "tail", "-F", "-n", "0", self.log_path]
+        LOG.info("$ %s", " ".join(cmd))
+        self._proc = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            text=True, bufsize=1, preexec_fn=os.setsid,
+        )
+        self._thread = threading.Thread(target=self._reader, daemon=True)
+        self._thread.start()
+
+    def _reader(self) -> None:
+        out = self.out_path.open("a", encoding="utf-8")
+        try:
+            assert self._proc and self._proc.stdout
+            for line in self._proc.stdout:
+                if self._stop.is_set():
+                    break
+                out.write(line)
+                out.flush()
+        except Exception as exc:  # noqa: BLE001
+            LOG.debug("cloudcp.log tail stopped: %s", exc)
+        finally:
+            out.close()
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self.dry_run or self._proc is None:
+            return
+        try:
+            os.killpg(os.getpgid(self._proc.pid), signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        try:
+            self._proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(os.getpgid(self._proc.pid), signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        if self._thread:
+            self._thread.join(timeout=5)
+        try:
+            n = sum(1 for _ in self.out_path.open(encoding="utf-8", errors="replace"))
+            LOG.info("cloudcp.log capture: %d lines -> %s", n, self.out_path.name)
+        except OSError:
+            pass
 
 
 # =====================================================================================
@@ -1026,6 +1099,9 @@ def run_one(dataset: dict, args, spec_dir: Path, batch_cfg: dict, tier_order: li
     start_dt = _dt.datetime.now()
     cap = JournalCapture(args.journal_tag, tr_id, log_dir, start_dt, args.dry_run,
                          lead_sec=args.capture_lead, drain_sec=args.capture_drain)
+    # cloudcp.log tail spanning the same window, written alongside the report
+    cloud_cap = CloudcpLogCapture(args.cloudcp_log, report_dir / "cloudcplogs.txt", args.dry_run)
+    cloud_cap.start()
     cap.start()
 
     # 5. scheduler (blocks until transfer complete)
@@ -1035,6 +1111,7 @@ def run_one(dataset: dict, args, spec_dir: Path, batch_cfg: dict, tier_order: li
 
     # stop capture (drains tail logs first)
     cap.stop()
+    cloud_cap.stop()
 
     year = start_dt.year
     cap_data = parse_capture(cap, year)
@@ -1237,6 +1314,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     ap.add_argument("--datagen-flag", default=DEF_DATAGEN_FLAG)
     ap.add_argument("--batchmeta-dir", default=DEF_BATCHMETA)
     ap.add_argument("--transfer-logs-dir", default=DEF_TRANSFER_LOGS)
+    ap.add_argument("--cloudcp-log", dest="cloudcp_log", default=DEF_CLOUDCP_LOG,
+                    help="cloudcp.log to tail into cloudcplogs.txt for the run window")
     ap.add_argument("--scheduler-python", default=DEF_SCHED_PY)
     ap.add_argument("--scheduler-script", default=DEF_SCHED_SCRIPT)
     ap.add_argument("--dir-path", default=DEF_DIR_PATH)
