@@ -19,7 +19,8 @@ Runs on the Linux bryck host. For each selected deterministic-enumeration datase
   6. fetches the per-file results CSV
      (/opt/bryck/bryckapi/downloads/cloud_transfer_logs/cloud_transfer_<id>/transfer_report_<id>.csv);
   7. parses logs + CSV and renders a fully self-contained HTML report with an animated
-     "replay" of pending / running workers / free workers over time, plus histograms;
+     "replay" of pending / running workers / free workers over time, plus histograms
+     and per-batch / per-tier throughput (min/avg/max) parsed from cloudcp.log;
   8. zips everything into sch_test_<id>.zip.
 
 For a range or --all it produces a per-dataset zip for EACH dataset and one COMBINED
@@ -130,6 +131,16 @@ _TS_RE = re.compile(r"^([A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2})\b")
 _PENDING_RE = re.compile(r"Pending-(\d+)\s*:\s*(\{.*\})")
 _RUNNING_RE = re.compile(r"Running with workers\s*:\s*(\{.*\})")
 _FREE_RE = re.compile(r"free workers\s+(\d+)")
+
+# cloudcp.log lines: "2026-08-03 09:56:04.707 [Stats][2340562] SUMMARY elapsed=2.27s
+# files=511 small=511 large=0 skipped=0 bytes=8372224 (7.98 MiB) files/sec=225.2 throughput=3.52 MiB/s"
+_CLOUDCP_TS_RE = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+)")
+_CLOUDCP_STATS_RE = re.compile(
+    r"\[Stats\]\[(\d+)\]\s+SUMMARY\s+elapsed=([\d.]+)s\s+files=(\d+)\s+"
+    r"small=(\d+)\s+large=(\d+)\s+skipped=(\d+)\s+bytes=(\d+)\s+\([^)]*\)\s+"
+    r"files/sec=([\d.]+)\s+throughput=([\d.]+)\s+MiB/s"
+)
+_CLOUDCP_BATCH_RE = re.compile(r"\[Batch\]\[(\d+)\]\s+done\s+records=(\d+)")
 
 
 # =====================================================================================
@@ -642,6 +653,129 @@ def parse_results_csv(csv_path: Path, year: int) -> dict:
 
 
 # =====================================================================================
+# Step 6b — throughput from cloudcp.log (per batch, per size-tier)
+# =====================================================================================
+def _tier_for_avg_size(avg_size: float, tier_sizes: list[tuple[str, int]]) -> str:
+    """Map a batch's average file size to the nearest manifest size-tier."""
+    if avg_size <= 0:
+        for name, sz in tier_sizes:
+            if sz == 0:
+                return name
+    best, best_ratio = None, None
+    for name, sz in tier_sizes:
+        if sz <= 0:
+            continue
+        ratio = (avg_size / sz) if avg_size >= sz else (sz / avg_size if avg_size else 1e18)
+        if best_ratio is None or ratio < best_ratio:
+            best, best_ratio = name, ratio
+    return best or (tier_sizes[0][0] if tier_sizes else "unknown")
+
+
+def _minmaxavg(vals: list[float]) -> dict:
+    if not vals:
+        return {"min": 0.0, "max": 0.0, "avg": 0.0, "median": 0.0}
+    s = sorted(vals)
+    n = len(s)
+    mid = n // 2
+    median = s[mid] if n % 2 else (s[mid - 1] + s[mid]) / 2
+    return {"min": s[0], "max": s[-1], "avg": sum(s) / n, "median": median}
+
+
+def parse_cloudcp_log(path: Path, tier_order: list[str],
+                      tier_sizes: list[tuple[str, int]]) -> dict:
+    """Parse per-batch throughput from cloudcp.log (cloudcplogs.txt).
+
+    Each batch emits a `[Stats] SUMMARY ... throughput=<T> MiB/s` line plus a
+    matching `[Batch][<pid>] done` line. Every batch is attributed to a size-tier
+    by its average file size (bytes/files), then min/max/avg/median throughput is
+    aggregated per tier and overall.
+    """
+    empty = {"batches": [], "per_tier": {}, "overall": {}, "tiers": []}
+    if not path.is_file():
+        return empty
+    text = path.read_text(encoding="utf-8", errors="replace")
+
+    batch_done: dict[str, _dt.datetime] = {}
+    stats: list[dict] = []
+    for line in text.splitlines():
+        tsm = _CLOUDCP_TS_RE.match(line)
+        ts = None
+        if tsm:
+            try:
+                ts = _dt.datetime.strptime(tsm.group(1), "%Y-%m-%d %H:%M:%S.%f")
+            except ValueError:
+                ts = None
+        bm = _CLOUDCP_BATCH_RE.search(line)
+        if bm and ts:
+            batch_done[bm.group(1)] = ts
+            continue
+        sm = _CLOUDCP_STATS_RE.search(line)
+        if sm and ts:
+            files = int(sm.group(3))
+            nbytes = int(sm.group(7))
+            avg_size = (nbytes / files) if files else 0.0
+            stats.append({
+                "pid": sm.group(1), "stats_ts": ts,
+                "elapsed": float(sm.group(2)),
+                "files": files, "bytes": nbytes,
+                "files_sec": float(sm.group(8)),
+                "throughput": float(sm.group(9)),
+                "tier": _tier_for_avg_size(avg_size, tier_sizes),
+            })
+    if not stats:
+        return empty
+
+    for s in stats:
+        s["done_ts"] = batch_done.get(s["pid"], s["stats_ts"])
+        s["start_ts"] = s["done_ts"] - _dt.timedelta(seconds=s["elapsed"])
+    t0 = min(s["start_ts"] for s in stats)
+
+    batches = []
+    for s in sorted(stats, key=lambda x: x["done_ts"]):
+        batches.append({
+            "tier": s["tier"],
+            "t_start": round((s["start_ts"] - t0).total_seconds(), 2),
+            "t_done": round((s["done_ts"] - t0).total_seconds(), 2),
+            "elapsed": round(s["elapsed"], 2),
+            "files": s["files"], "bytes": s["bytes"],
+            "files_sec": round(s["files_sec"], 2),
+            "throughput": round(s["throughput"], 3),
+        })
+
+    order = tier_order + [t for t in {b["tier"] for b in batches} if t not in tier_order]
+    per_tier = {}
+    for tier in order:
+        tb = [b for b in batches if b["tier"] == tier]
+        if not tb:
+            continue
+        st = _minmaxavg([b["throughput"] for b in tb])
+        tot_bytes = sum(b["bytes"] for b in tb)
+        span = max(b["t_done"] for b in tb) - min(b["t_start"] for b in tb)
+        per_tier[tier] = {
+            "batches": len(tb),
+            "files": sum(b["files"] for b in tb),
+            "bytes": tot_bytes,
+            "min": round(st["min"], 3), "max": round(st["max"], 3),
+            "avg": round(st["avg"], 3), "median": round(st["median"], 3),
+            "avg_files_sec": round(sum(b["files_sec"] for b in tb) / len(tb), 2),
+            "aggregate_mib_s": round((tot_bytes / (1024 * 1024) / span) if span > 0 else 0.0, 3),
+        }
+
+    ov = _minmaxavg([b["throughput"] for b in batches])
+    all_bytes = sum(b["bytes"] for b in batches)
+    wall = max(b["t_done"] for b in batches) - min(b["t_start"] for b in batches)
+    overall = {
+        "batches": len(batches), "bytes": all_bytes,
+        "min": round(ov["min"], 3), "max": round(ov["max"], 3),
+        "avg": round(ov["avg"], 3), "median": round(ov["median"], 3),
+        "aggregate_mib_s": round((all_bytes / (1024 * 1024) / wall) if wall > 0 else 0.0, 3),
+        "wall_sec": round(wall, 2),
+    }
+    return {"batches": batches, "per_tier": per_tier, "overall": overall,
+            "tiers": [t for t in order if t in per_tier]}
+
+
+# =====================================================================================
 # Step 7 — HTML report (self-contained)
 # =====================================================================================
 def _histogram(values: list[float], nbins: int = 40) -> dict:
@@ -690,7 +824,7 @@ def build_structure_payload(dataset: dict) -> dict:
 
 
 def build_report_payload(dataset, tr_id, enum_payload, cap_data, csv_summary,
-                         meta, batch_cfg, tier_order, structure) -> dict:
+                         meta, batch_cfg, tier_order, structure, throughput) -> dict:
     tiers = list(dict.fromkeys(tier_order + cap_data.get("tiers_seen", [])))
     return {
         "meta": meta,
@@ -707,6 +841,7 @@ def build_report_payload(dataset, tr_id, enum_payload, cap_data, csv_summary,
         "timeline": cap_data["timeline"],
         "log_counts": cap_data["counts"],
         "csv_summary": csv_summary,
+        "throughput": throughput,
         "completion_hist": _histogram(csv_summary.get("completions_rel", [])),
     }
 
@@ -843,6 +978,27 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   </section>
 
   <section>
+    <h2>Throughput — per batch &amp; per category</h2>
+    <div class="sub" id="thrOverall"></div>
+    <canvas id="thrScatterCv" height="280"></canvas>
+    <div class="muted" style="text-align:center">Per-batch throughput (MiB/s, log scale) vs completion time — colored by tier</div>
+    <div class="row" style="margin-top:14px">
+      <div>
+        <canvas id="thrBarsCv" height="240"></canvas>
+        <div class="muted" style="text-align:center">Avg throughput per tier (log) · whisker = min–max</div>
+      </div>
+      <div>
+        <table id="thrTbl">
+          <thead><tr><th>Tier</th><th>Batches</th><th>Files</th><th>Bytes</th>
+          <th>Min</th><th>Avg</th><th>Med</th><th>Max</th><th>files/s</th><th>Aggregate</th></tr></thead>
+          <tbody></tbody>
+        </table>
+        <div class="muted">throughput in MiB/s · Aggregate = tier bytes ÷ tier wall-clock span</div>
+      </div>
+    </div>
+  </section>
+
+  <section>
     <h2>Per-status breakdown</h2>
     <table id="statusTbl"><thead><tr><th>Status</th><th>Count</th></tr></thead><tbody></tbody></table>
   </section>
@@ -888,6 +1044,66 @@ Object.entries(cs.status_counts||{}).forEach(([s,c])=>{
 // legend
 const lg=document.getElementById('legend');
 TIERS.forEach(t=>{lg.innerHTML+='<span><i class="dot" style="background:'+(COL[t]||'#888')+'"></i>'+t+'</span>';});
+
+// ---- throughput (per batch / per tier from cloudcp.log) ----
+const THR=DATA.throughput||{batches:[],per_tier:{},overall:{},tiers:[]};
+{
+  const ov=THR.overall||{};
+  document.getElementById('thrOverall').textContent = ov.batches
+    ? (ov.batches+' batches · avg '+(ov.avg||0).toFixed(2)+' MiB/s · peak '+(ov.max||0).toFixed(2)
+       +' MiB/s · aggregate '+(ov.aggregate_mib_s||0).toFixed(2)+' MiB/s over '+(ov.wall_sec||0).toFixed(1)+'s')
+    : 'no cloudcp.log throughput data';
+  const ttb=document.querySelector('#thrTbl tbody');
+  (THR.tiers||[]).forEach(t=>{const s=THR.per_tier[t];
+    ttb.innerHTML+='<tr><td><i class="dot" style="background:'+(COL[t]||'#888')+'"></i> '+t+'</td>'
+      +'<td>'+s.batches+'</td><td>'+fmt(s.files)+'</td><td>'+bytes(s.bytes)+'</td>'
+      +'<td>'+s.min.toFixed(2)+'</td><td>'+s.avg.toFixed(2)+'</td><td>'+s.median.toFixed(2)+'</td><td>'+s.max.toFixed(2)+'</td>'
+      +'<td>'+s.avg_files_sec.toFixed(1)+'</td><td>'+s.aggregate_mib_s.toFixed(2)+'</td></tr>';});
+  if(ov.batches){ttb.innerHTML+='<tr style="font-weight:700"><td>ALL</td><td>'+ov.batches+'</td><td>-</td>'
+      +'<td>'+bytes(ov.bytes||0)+'</td><td>'+(ov.min||0).toFixed(2)+'</td><td>'+(ov.avg||0).toFixed(2)+'</td>'
+      +'<td>'+(ov.median||0).toFixed(2)+'</td><td>'+(ov.max||0).toFixed(2)+'</td><td>-</td>'
+      +'<td>'+(ov.aggregate_mib_s||0).toFixed(2)+'</td></tr>';}
+}
+function drawThrScatter(){
+  const cv=document.getElementById('thrScatterCv'); const {c,w,h}=prep(cv); clear(c,w,h);
+  const B=THR.batches||[]; const pad=46; axis(c,w,h,pad);
+  if(!B.length){c.fillStyle='#8b949e';c.fillText('no throughput data',20,30);return;}
+  const tMax=Math.max(1,...B.map(b=>b.t_done));
+  const pos=B.map(b=>b.throughput).filter(v=>v>0);
+  const vMin=pos.length?Math.max(0.01,Math.min(...pos)):0.01;
+  const vMax=Math.max(1,...B.map(b=>b.throughput));
+  const lgv=v=>Math.log10(Math.max(v,vMin));
+  const lo=lgv(vMin), hi=lgv(vMax);
+  const X=t=>pad+(w-pad-12)*(t/tMax);
+  const Y=v=>{const y=(lgv(v)-lo)/((hi-lo)||1); return (h-pad-8)-(h-pad-20)*y;};
+  c.font='10px sans-serif';c.textAlign='right';
+  for(let p=Math.floor(lo);p<=Math.ceil(hi);p++){const yy=Y(Math.pow(10,p));
+    c.strokeStyle='#20262d';c.beginPath();c.moveTo(pad,yy);c.lineTo(w-6,yy);c.stroke();
+    c.fillStyle='#8b949e';c.fillText(Math.pow(10,p)+'',pad-4,yy+3);}
+  B.forEach(b=>{const x=X(b.t_done),y=Y(b.throughput);
+    c.fillStyle=COL[b.tier]||'#888';c.globalAlpha=0.8;
+    c.beginPath();c.arc(x,y,3,0,6.283);c.fill();c.globalAlpha=1;});
+  c.fillStyle='#8b949e';c.textAlign='center';c.fillText(tMax.toFixed(0)+'s',w-24,h-pad+14);
+  c.textAlign='left';c.fillText('MiB/s (log)',pad-40,12);
+}
+function drawThrBars(){
+  const cv=document.getElementById('thrBarsCv'); const {c,w,h}=prep(cv); clear(c,w,h);
+  const tiers=THR.tiers||[]; const pad=40; axis(c,w,h,pad);
+  if(!tiers.length){c.fillStyle='#8b949e';c.fillText('no throughput data',20,30);return;}
+  const maxV=Math.max(1,...tiers.map(t=>THR.per_tier[t].max));
+  const lgv=v=>Math.log10(Math.max(v,0.01));
+  const lo=lgv(0.01), hi=lgv(maxV);
+  const Y=v=>{const y=(lgv(v)-lo)/((hi-lo)||1);return (h-pad-8)-(h-pad-20)*y;};
+  const bw=(w-pad-10)/tiers.length; c.font='11px sans-serif';
+  tiers.forEach((t,i)=>{const s=THR.per_tier[t];const x=pad+i*bw+bw*0.2;const bwidth=bw*0.6;
+    const yTop=Y(Math.max(s.avg,0.01));
+    c.fillStyle=COL[t]||'#888';c.fillRect(x,yTop,bwidth,(h-pad)-yTop);
+    c.strokeStyle='#e6edf3';c.lineWidth=1.5;c.beginPath();
+    c.moveTo(x+bwidth/2,Y(Math.max(s.min,0.01)));c.lineTo(x+bwidth/2,Y(Math.max(s.max,0.01)));c.stroke();
+    c.fillStyle='#e6edf3';c.textAlign='center';c.fillText(s.avg.toFixed(1),x+bwidth/2,yTop-4);
+    c.fillStyle='#8b949e';c.fillText(t,x+bwidth/2,h-pad+12);});
+  c.textAlign='left';c.fillStyle='#8b949e';c.fillText('avg MiB/s (log)',pad,12);
+}
 
 // ---- dataset structure & enumeration expectation ----
 const ST=DATA.structure||{levels:[],enumeration_order:[]};
@@ -1035,7 +1251,7 @@ document.getElementById('resetBtn').onclick=()=>{stop();idx=0;renderFrame(0);};
 document.getElementById('speed').onchange=()=>{if(playing)start();};
 scrub.oninput=e=>{stop();idx=parseInt(e.target.value,10);renderFrame(idx);};
 
-function redraw(){renderFrame(idx);drawTS();drawHist();}
+function redraw(){renderFrame(idx);drawTS();drawHist();drawThrScatter();drawThrBars();}
 window.addEventListener('resize',redraw);
 redraw();
 </script>
@@ -1116,6 +1332,10 @@ def run_one(dataset: dict, args, spec_dir: Path, batch_cfg: dict, tier_order: li
     year = start_dt.year
     cap_data = parse_capture(cap, year)
 
+    # 6b. throughput from cloudcp.log (per batch, per size-tier)
+    tier_sizes = [((lv.get("tier") or "").lower(), int(lv.get("size_bytes", 0) or 0))
+                  for lv in dataset.get("levels", [])]
+    throughput = parse_cloudcp_log(report_dir / "cloudcplogs.txt", tier_order, tier_sizes)
     # 6. results csv
     csv_dst = report_dir / f"transfer_report_{tr_id}.csv"
     csv_summary: dict = {"total": 0, "status_counts": {}, "success": 0, "failed": 0,
@@ -1148,9 +1368,10 @@ def run_one(dataset: dict, args, spec_dir: Path, batch_cfg: dict, tier_order: li
     # 7. html + summary
     structure = build_structure_payload(dataset)
     payload = build_report_payload(dataset, tr_id, enum_payload, cap_data, csv_summary,
-                                   meta, batch_cfg, tier_order, structure)
+                                   meta, batch_cfg, tier_order, structure, throughput)
     render_html(payload, report_dir / "report.html")
-    write_summary_txt(report_dir / "summary.txt", meta, enum_payload, cap_data, csv_summary, structure)
+    write_summary_txt(report_dir / "summary.txt", meta, enum_payload, cap_data, csv_summary,
+                      structure, throughput)
 
     # 9. zip
     zip_path = out_root / f"sch_test_{tr_id}.zip"
@@ -1168,10 +1389,12 @@ def run_one(dataset: dict, args, spec_dir: Path, batch_cfg: dict, tier_order: li
         "dataset_id": ds_id, "transfer_id": tr_id, "meta": meta,
         "csv_summary": csv_summary, "report_dir": str(report_dir),
         "zip": str(zip_path), "log_counts": cap_data["counts"],
+        "throughput_overall": throughput.get("overall", {}),
     }
 
 
-def write_summary_txt(path: Path, meta, enum_payload, cap_data, csv_summary, structure) -> None:
+def write_summary_txt(path: Path, meta, enum_payload, cap_data, csv_summary, structure,
+                      throughput=None) -> None:
     def _bytes(n: int) -> str:
         x = float(n)
         for u in ("B", "KB", "MB", "GB", "TB"):
@@ -1219,6 +1442,24 @@ def write_summary_txt(path: Path, meta, enum_payload, cap_data, csv_summary, str
         f"  free events    : {cap_data['counts']['free_events']}",
         f"  timeline frames: {len(cap_data['timeline'])}",
     ]
+    tp = throughput or {}
+    if tp.get("per_tier"):
+        lines += ["", "Throughput (MiB/s per batch, grouped by tier):"]
+        for tier in tp.get("tiers", []):
+            s = tp["per_tier"][tier]
+            lines.append(
+                f"  {tier:<6} batches={s['batches']:>3}  "
+                f"min={s['min']:>7.2f}  avg={s['avg']:>7.2f}  med={s['median']:>7.2f}  "
+                f"max={s['max']:>7.2f}  files/s={s['avg_files_sec']:>7.1f}  "
+                f"agg={s['aggregate_mib_s']:>7.2f}"
+            )
+        ov = tp.get("overall", {})
+        if ov:
+            lines.append(
+                f"  {'ALL':<6} batches={ov['batches']:>3}  "
+                f"min={ov['min']:>7.2f}  avg={ov['avg']:>7.2f}  med={ov['median']:>7.2f}  "
+                f"max={ov['max']:>7.2f}  {'':>16}  agg={ov['aggregate_mib_s']:>7.2f}"
+            )
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
@@ -1233,6 +1474,7 @@ def build_combined(results: list[dict], out_root: Path, dry_run: bool) -> None:
     rows = ""
     for r in results:
         cs = r["csv_summary"]
+        ov = r.get("throughput_overall", {})
         rows += (
             "<tr>"
             f"<td>{r['dataset_id']}</td>"
@@ -1241,6 +1483,8 @@ def build_combined(results: list[dict], out_root: Path, dry_run: bool) -> None:
             f"<td>{cs['total']}</td>"
             f"<td class='ok'>{cs['success']}</td>"
             f"<td class='bad'>{cs['failed']}</td>"
+            f"<td>{ov.get('avg', 0):.1f}</td>"
+            f"<td>{ov.get('max', 0):.1f}</td>"
             f"<td>{r['meta']['scheduler_exit']}</td>"
             f"<td><a href='report_{r['transfer_id']}/report.html'>open</a></td>"
             "</tr>"
@@ -1287,7 +1531,7 @@ th{color:#8b949e}a{color:#58a6ff}.ok{color:#3fb950}.bad{color:#f85149}
 <header><h1>Scheduler Test — Combined Report</h1><div class="sub">__AGG__ · __TS__</div></header>
 <div class="wrap">
 <table><thead><tr><th>Dataset</th><th>Transfer</th><th>Duration (s)</th><th>Files</th>
-<th>Success</th><th>Failed</th><th>Exit</th><th>Report</th></tr></thead>
+<th>Success</th><th>Failed</th><th>Avg MiB/s</th><th>Peak MiB/s</th><th>Exit</th><th>Report</th></tr></thead>
 <tbody>__ROWS__</tbody></table>
 </div></body></html>
 """
