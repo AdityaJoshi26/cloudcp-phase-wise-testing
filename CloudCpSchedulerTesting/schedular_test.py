@@ -57,6 +57,8 @@ Common options (all have host-sensible defaults):
     --capture-drain SEC    keep capturing after the scheduler exits (default 6)
     --skip-datagen         reuse already-materialised data
     --delete               after the run, delete the materialised data dir (<data-root>/<id>)
+    --clear-bucket         after the run, clear uploaded S3 objects under <s3-base>/<id>
+    --cleanup              after the run, do both --delete and --clear-bucket
     --dry-run              print external commands without executing
 """
 
@@ -285,16 +287,41 @@ def create_transfer_dir(batchmeta_dir: str, tr_id: int, dry_run: bool) -> Path:
     return p
 
 
-def cleanup_data_dir(src: str, dry_run: bool) -> None:
-    """Remove the materialised data dir created under the data-root (--delete)."""
-    p = Path(src)
-    LOG.info("--delete: removing materialised data dir %s", p)
-    if dry_run:
+def cleanup_data_dir(src: str, data_root: str, dry_run: bool) -> None:
+    """Remove the materialised data dir under the data-root (--delete).
+
+    Guarded so it only ever deletes a path strictly under --data-root, never
+    the data-root itself or something shorter/unexpected.
+    """
+    root = str(src).rstrip("/")
+    base = str(data_root).rstrip("/")
+    LOG.info("--delete: removing materialised data dir %s", root)
+    if not (base and root.startswith(base + "/") and len(root) > len(base) + 1):
+        LOG.error("refusing to delete unexpected path (not under %s): %s", base, root)
         return
+    if dry_run:
+        LOG.info("$ rm -rf %s", root)
+        return
+    p = Path(root)
     if p.is_dir():
-        shutil.rmtree(p, ignore_errors=True)
+        shutil.rmtree(p)
+        LOG.info("removed %s", root)
     else:
-        LOG.warning("data dir not found, nothing to delete: %s", p)
+        LOG.warning("data dir not found, nothing to delete: %s", root)
+
+
+def clear_transfer_bucket(dst: str, endpoint_url: str, dry_run: bool) -> None:
+    """Remove the uploaded objects under the dataset's S3 prefix (--clear-bucket).
+
+    Clears only the dataset prefix (<s3-base>/<id>) via `aws s3 rm --recursive`;
+    the bucket itself is preserved. A non-zero rc (e.g. empty prefix) is
+    logged and ignored so it never aborts the run.
+    """
+    LOG.info("--clear-bucket: removing objects under %s (bucket preserved)", dst)
+    cmd = ["aws", "s3", "rm", dst, "--recursive", "--endpoint-url", endpoint_url]
+    rc = run_cmd(cmd, dry_run=dry_run, check=False)
+    if not dry_run and rc != 0:
+        LOG.warning("bucket clear returned rc=%s (continuing)", rc)
 
 
 # =====================================================================================
@@ -1054,9 +1081,11 @@ def run_one(dataset: dict, args, spec_dir: Path, batch_cfg: dict, tier_order: li
         zip_path.unlink()
     zip_dir(report_dir, zip_path)
 
-    # 10. optional cleanup of the materialised data dir
-    if args.delete:
-        cleanup_data_dir(src, args.dry_run)
+    # 10. optional cleanup of the materialised data dir + S3 dst prefix
+    if args.delete or args.cleanup:
+        cleanup_data_dir(src, args.data_root, args.dry_run)
+    if args.clear_bucket or args.cleanup:
+        clear_transfer_bucket(dst, args.endpoint_url, args.dry_run)
 
     return {
         "dataset_id": ds_id, "transfer_id": tr_id, "meta": meta,
@@ -1223,6 +1252,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     ap.add_argument("--skip-datagen", action="store_true")
     ap.add_argument("--delete", action="store_true",
                     help="after the run, delete the materialised data dir (<data-root>/<id>)")
+    ap.add_argument("--clear-bucket", dest="clear_bucket", action="store_true",
+                    help="after the run, clear the uploaded S3 objects under <s3-base>/<id>")
+    ap.add_argument("--cleanup", action="store_true",
+                    help="after the run, do both --delete and --clear-bucket")
     ap.add_argument("--negative", action="store_true",
                     help="run the scheduler-level negative test suite (all cases)")
     ap.add_argument("--negative-case", default=None,
