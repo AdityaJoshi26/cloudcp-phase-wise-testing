@@ -760,6 +760,7 @@ def parse_cloudcp_log(path: Path, tier_order: list[str],
             "avg": round(st["avg"], 3), "median": round(st["median"], 3),
             "avg_files_sec": round(sum(b["files_sec"] for b in tb) / len(tb), 2),
             "aggregate_mb_s": round((tot_bytes / 1e6 / span) if span > 0 else 0.0, 3),
+            "batches_per_sec": round((len(tb) / span) if span > 0 else 0.0, 3),
             "elapsed_min": round(el["min"], 2), "elapsed_max": round(el["max"], 2),
             "elapsed_avg": round(el["avg"], 2), "elapsed_median": round(el["median"], 2),
         }
@@ -773,6 +774,7 @@ def parse_cloudcp_log(path: Path, tier_order: list[str],
         "min": round(ov["min"], 3), "max": round(ov["max"], 3),
         "avg": round(ov["avg"], 3), "median": round(ov["median"], 3),
         "aggregate_mb_s": round((all_bytes / 1e6 / wall) if wall > 0 else 0.0, 3),
+        "batches_per_sec": round((len(batches) / wall) if wall > 0 else 0.0, 3),
         "elapsed_min": round(el["min"], 2), "elapsed_max": round(el["max"], 2),
         "elapsed_avg": round(el["avg"], 2), "elapsed_median": round(el["median"], 2),
         "wall_sec": round(wall, 2),
@@ -894,6 +896,14 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   .enumexp{display:flex;flex-direction:column;gap:8px;margin-top:6px}
   .enumexp .step{display:flex;align-items:center;gap:10px;background:#0b0f14;border:1px solid var(--line);border-radius:8px;padding:8px 12px;font-size:13px}
   .enumexp .ord{width:22px;height:22px;border-radius:50%;background:#21262d;color:var(--fg);display:inline-flex;align-items:center;justify-content:center;font-weight:700;font-size:12px}
+  .metricdefs{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px;margin:2px 0 14px}
+  .metricdefs div{background:#0b0f14;border:1px solid var(--line);border-radius:8px;padding:10px 12px;font-size:12px;color:var(--mut)}
+  .metricdefs b{color:var(--fg);font-size:13px}
+  .chartwrap{position:relative}
+  .tip{position:fixed;pointer-events:none;z-index:50;background:#0b0f14;border:1px solid var(--acc);border-radius:6px;padding:8px 10px;font-size:12px;color:var(--fg);box-shadow:0 4px 14px rgba(0,0,0,.5);display:none;max-width:260px;line-height:1.5}
+  .tip b{color:var(--acc)}
+  .tip .r{display:flex;justify-content:space-between;gap:14px}
+  .tip .r span:last-child{font-weight:700}
   @media(max-width:760px){.row{grid-template-columns:1fr}}
 </style>
 </head>
@@ -986,25 +996,30 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   <section>
     <h2>Throughput &amp; per-batch time — per batch &amp; per category</h2>
     <div class="sub" id="thrOverall"></div>
-    <canvas id="thrScatterCv" height="280"></canvas>
-    <div class="muted" style="text-align:center">Per-batch throughput (MB/s, log scale) vs completion time — colored by tier</div>
+    <div class="metricdefs">
+      <div><b>MB/s (throughput)</b><br>Data transfer rate of a batch = bytes uploaded ÷ processing time. Higher is faster. Reported in megabytes/second (base-1000, converted from the log's MiB/s).</div>
+      <div><b>s/batch (processing time)</b><br>Wall-clock seconds a single batch took to process, taken from the cloudcp.log <code>elapsed=</code> field. Lower is faster; rising values across a tier signal queueing/contention.</div>
+      <div><b>batches/s (batch rate)</b><br>How many batches completed per second in a tier = batch count ÷ the tier's wall-clock span. Reflects scheduling/enumeration pace, not raw byte speed.</div>
+    </div>
+    <div class="chartwrap"><canvas id="thrScatterCv" height="280"></canvas></div>
+    <div class="muted" style="text-align:center">Per-batch throughput (MB/s, log scale) vs completion time — colored by tier · hover a point for batch detail</div>
     <div class="row" style="margin-top:14px">
       <div>
-        <canvas id="thrBarsCv" height="240"></canvas>
-        <div class="muted" style="text-align:center">Avg throughput per tier (MB/s, log) · whisker = min–max</div>
+        <div class="chartwrap"><canvas id="thrBarsCv" height="240"></canvas></div>
+        <div class="muted" style="text-align:center">Avg throughput per tier (MB/s, log) · whisker = min–max · hover a bar</div>
       </div>
       <div>
-        <canvas id="elapBarsCv" height="240"></canvas>
-        <div class="muted" style="text-align:center">Avg processing time per batch per tier (s) · whisker = min–max</div>
+        <div class="chartwrap"><canvas id="elapBarsCv" height="240"></canvas></div>
+        <div class="muted" style="text-align:center">Avg processing time per batch per tier (s) · whisker = min–max · hover a bar</div>
       </div>
     </div>
     <table id="thrTbl" style="margin-top:14px">
       <thead><tr><th>Tier</th><th>Batches</th><th>Files</th><th>Data</th>
-      <th>Min</th><th>Avg</th><th>Med</th><th>Max</th><th>files/s</th><th>Agg MB/s</th>
+      <th>Min MB/s</th><th>Avg MB/s</th><th>Med MB/s</th><th>Max MB/s</th><th>files/s</th><th>Agg MB/s</th><th>batches/s</th>
       <th>s/batch min</th><th>s/batch avg</th><th>s/batch max</th></tr></thead>
       <tbody></tbody>
     </table>
-    <div class="muted">throughput in MB/s · Agg = tier bytes ÷ tier wall-clock span · s/batch = processing time from cloudcp.log elapsed</div>
+    <div class="muted">MB/s = per-batch rate (min/avg/med/max) · Agg MB/s = tier bytes ÷ tier wall-clock span · batches/s = batches ÷ tier span · s/batch = per-batch processing time from cloudcp.log elapsed</div>
   </section>
 
   <section>
@@ -1013,6 +1028,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   </section>
 
 </div>
+<div id="tip" class="tip"></div>
 <script id="payload" type="application/json">__DATA__</script>
 <script>
 const DATA = JSON.parse(document.getElementById('payload').textContent);
@@ -1061,7 +1077,7 @@ const THR=DATA.throughput||{batches:[],per_tier:{},overall:{},tiers:[]};
   const ov=THR.overall||{};
   document.getElementById('thrOverall').textContent = ov.batches
     ? (ov.batches+' batches · avg '+(ov.avg||0).toFixed(2)+' MB/s · peak '+(ov.max||0).toFixed(2)
-       +' MB/s · aggregate '+(ov.aggregate_mb_s||0).toFixed(2)+' MB/s · avg '+(ov.elapsed_avg||0).toFixed(2)
+       +' MB/s · aggregate '+(ov.aggregate_mb_s||0).toFixed(2)+' MB/s · '+(ov.batches_per_sec||0).toFixed(3)+' batches/s · avg '+(ov.elapsed_avg||0).toFixed(2)
        +'s/batch (max '+(ov.elapsed_max||0).toFixed(2)+'s) over '+(ov.wall_sec||0).toFixed(1)+'s')
     : 'no cloudcp.log throughput data';
   const ttb=document.querySelector('#thrTbl tbody');
@@ -1069,16 +1085,19 @@ const THR=DATA.throughput||{batches:[],per_tier:{},overall:{},tiers:[]};
     ttb.innerHTML+='<tr><td><i class="dot" style="background:'+(COL[t]||'#888')+'"></i> '+t+'</td>'
       +'<td>'+s.batches+'</td><td>'+fmt(s.files)+'</td><td>'+dsize(s.bytes)+'</td>'
       +'<td>'+s.min.toFixed(2)+'</td><td>'+s.avg.toFixed(2)+'</td><td>'+s.median.toFixed(2)+'</td><td>'+s.max.toFixed(2)+'</td>'
-      +'<td>'+s.avg_files_sec.toFixed(1)+'</td><td>'+s.aggregate_mb_s.toFixed(2)+'</td>'
+      +'<td>'+s.avg_files_sec.toFixed(1)+'</td><td>'+s.aggregate_mb_s.toFixed(2)+'</td><td>'+(s.batches_per_sec||0).toFixed(3)+'</td>'
       +'<td>'+s.elapsed_min.toFixed(2)+'</td><td>'+s.elapsed_avg.toFixed(2)+'</td><td>'+s.elapsed_max.toFixed(2)+'</td></tr>';});
   if(ov.batches){ttb.innerHTML+='<tr style="font-weight:700"><td>ALL</td><td>'+ov.batches+'</td><td>-</td>'
       +'<td>'+dsize(ov.bytes||0)+'</td><td>'+(ov.min||0).toFixed(2)+'</td><td>'+(ov.avg||0).toFixed(2)+'</td>'
       +'<td>'+(ov.median||0).toFixed(2)+'</td><td>'+(ov.max||0).toFixed(2)+'</td><td>-</td>'
-      +'<td>'+(ov.aggregate_mb_s||0).toFixed(2)+'</td>'
+      +'<td>'+(ov.aggregate_mb_s||0).toFixed(2)+'</td><td>'+(ov.batches_per_sec||0).toFixed(3)+'</td>'
       +'<td>'+(ov.elapsed_min||0).toFixed(2)+'</td><td>'+(ov.elapsed_avg||0).toFixed(2)+'</td><td>'+(ov.elapsed_max||0).toFixed(2)+'</td></tr>';}
 }
+const HITS={};
+function tipRows(rows){return rows.map(r=>'<div class="r"><span>'+r[0]+'</span><span>'+r[1]+'</span></div>').join('');}
 function drawThrScatter(){
   const cv=document.getElementById('thrScatterCv'); const {c,w,h}=prep(cv); clear(c,w,h);
+  HITS.thrScatterCv={w,h,regions:[]};
   const B=THR.batches||[]; const pad=46; axis(c,w,h,pad);
   if(!B.length){c.fillStyle='#8b949e';c.fillText('no throughput data',20,30);return;}
   const tMax=Math.max(1,...B.map(b=>b.t_done));
@@ -1095,12 +1114,18 @@ function drawThrScatter(){
     c.fillStyle='#8b949e';c.fillText(Math.pow(10,p)+'',pad-4,yy+3);}
   B.forEach(b=>{const x=X(b.t_done),y=Y(b.throughput);
     c.fillStyle=COL[b.tier]||'#888';c.globalAlpha=0.8;
-    c.beginPath();c.arc(x,y,3,0,6.283);c.fill();c.globalAlpha=1;});
+    c.beginPath();c.arc(x,y,3,0,6.283);c.fill();c.globalAlpha=1;
+    HITS.thrScatterCv.regions.push({type:'circ',x,y,r:6,
+      html:'<b>'+b.tier+' batch</b>'+tipRows([
+        ['throughput',b.throughput.toFixed(2)+' MB/s'],['processing',b.elapsed.toFixed(2)+' s'],
+        ['files',fmt(b.files)],['data',dsize(b.bytes)],['files/s',b.files_sec.toFixed(1)],
+        ['done at',b.t_done.toFixed(1)+' s']])});});
   c.fillStyle='#8b949e';c.textAlign='center';c.fillText(tMax.toFixed(0)+'s',w-24,h-pad+14);
   c.textAlign='left';c.fillText('MB/s (log)',pad-40,12);
 }
 function drawThrBars(){
   const cv=document.getElementById('thrBarsCv'); const {c,w,h}=prep(cv); clear(c,w,h);
+  HITS.thrBarsCv={w,h,regions:[]};
   const tiers=THR.tiers||[]; const pad=40; axis(c,w,h,pad);
   if(!tiers.length){c.fillStyle='#8b949e';c.fillText('no throughput data',20,30);return;}
   const maxV=Math.max(1,...tiers.map(t=>THR.per_tier[t].max));
@@ -1114,11 +1139,18 @@ function drawThrBars(){
     c.strokeStyle='#e6edf3';c.lineWidth=1.5;c.beginPath();
     c.moveTo(x+bwidth/2,Y(Math.max(s.min,0.01)));c.lineTo(x+bwidth/2,Y(Math.max(s.max,0.01)));c.stroke();
     c.fillStyle='#e6edf3';c.textAlign='center';c.fillText(s.avg.toFixed(1),x+bwidth/2,yTop-4);
-    c.fillStyle='#8b949e';c.fillText(t,x+bwidth/2,h-pad+12);});
+    c.fillStyle='#8b949e';c.fillText(t,x+bwidth/2,h-pad+12);
+    HITS.thrBarsCv.regions.push({type:'rect',x,y:8,w:bwidth,h:(h-pad)-8,
+      html:'<b>'+t+' throughput</b>'+tipRows([
+        ['min',s.min.toFixed(2)+' MB/s'],['avg',s.avg.toFixed(2)+' MB/s'],
+        ['median',s.median.toFixed(2)+' MB/s'],['max',s.max.toFixed(2)+' MB/s'],
+        ['aggregate',s.aggregate_mb_s.toFixed(2)+' MB/s'],['batches/s',(s.batches_per_sec||0).toFixed(3)],
+        ['batches',s.batches],['files',fmt(s.files)]])});});
   c.textAlign='left';c.fillStyle='#8b949e';c.fillText('avg MB/s (log)',pad,12);
 }
 function drawElapBars(){
   const cv=document.getElementById('elapBarsCv'); const {c,w,h}=prep(cv); clear(c,w,h);
+  HITS.elapBarsCv={w,h,regions:[]};
   const tiers=THR.tiers||[]; const pad=40; axis(c,w,h,pad);
   if(!tiers.length){c.fillStyle='#8b949e';c.fillText('no throughput data',20,30);return;}
   const maxV=Math.max(0.1,...tiers.map(t=>THR.per_tier[t].elapsed_max));
@@ -1130,9 +1162,33 @@ function drawElapBars(){
     c.strokeStyle='#e6edf3';c.lineWidth=1.5;c.beginPath();
     c.moveTo(x+bwidth/2,Y(s.elapsed_min));c.lineTo(x+bwidth/2,Y(s.elapsed_max));c.stroke();
     c.fillStyle='#e6edf3';c.textAlign='center';c.fillText(s.elapsed_avg.toFixed(1)+'s',x+bwidth/2,yTop-4);
-    c.fillStyle='#8b949e';c.fillText(t,x+bwidth/2,h-pad+12);});
+    c.fillStyle='#8b949e';c.fillText(t,x+bwidth/2,h-pad+12);
+    HITS.elapBarsCv.regions.push({type:'rect',x,y:8,w:bwidth,h:(h-pad)-8,
+      html:'<b>'+t+' processing time</b>'+tipRows([
+        ['min',s.elapsed_min.toFixed(2)+' s'],['avg',s.elapsed_avg.toFixed(2)+' s'],
+        ['median',s.elapsed_median.toFixed(2)+' s'],['max',s.elapsed_max.toFixed(2)+' s'],
+        ['batches/s',(s.batches_per_sec||0).toFixed(3)],['batches',s.batches]])});});
   c.textAlign='left';c.fillStyle='#8b949e';c.fillText('avg seconds/batch',pad,12);
 }
+function attachHover(id){
+  const cv=document.getElementById(id); const tip=document.getElementById('tip');
+  cv.addEventListener('mousemove',e=>{
+    const hit=HITS[id]; if(!hit){tip.style.display='none';return;}
+    const rect=cv.getBoundingClientRect();
+    const mx=(e.clientX-rect.left)*(hit.w/rect.width);
+    const my=(e.clientY-rect.top)*(hit.h/rect.height);
+    let found=null,best=1e9;
+    for(const rg of hit.regions){
+      if(rg.type==='rect'){ if(mx>=rg.x&&mx<=rg.x+rg.w&&my>=rg.y&&my<=rg.y+rg.h){found=rg;break;} }
+      else { const d=Math.hypot(mx-rg.x,my-rg.y); if(d<=rg.r&&d<best){best=d;found=rg;} }
+    }
+    if(found){tip.innerHTML=found.html;tip.style.display='block';
+      tip.style.left=(e.clientX+14)+'px';tip.style.top=(e.clientY+14)+'px';}
+    else tip.style.display='none';
+  });
+  cv.addEventListener('mouseleave',()=>{tip.style.display='none';});
+}
+['thrScatterCv','thrBarsCv','elapBarsCv'].forEach(attachHover);
 
 // ---- dataset structure & enumeration expectation ----
 const ST=DATA.structure||{levels:[],enumeration_order:[]};
@@ -1473,21 +1529,31 @@ def write_summary_txt(path: Path, meta, enum_payload, cap_data, csv_summary, str
     ]
     tp = throughput or {}
     if tp.get("per_tier"):
-        lines += ["", "Throughput (MB/s per batch, grouped by tier):"]
+        lines += [
+            "",
+            "Metric definitions:",
+            "  MB/s      = per-batch transfer rate (bytes uploaded / processing time)",
+            "  agg MB/s  = tier bytes / tier wall-clock span",
+            "  batch/s   = batches completed per second (batches / tier span)",
+            "  s/batch   = per-batch processing time (cloudcp.log elapsed=)",
+            "",
+            "Throughput (MB/s per batch, grouped by tier):",
+        ]
         for tier in tp.get("tiers", []):
             s = tp["per_tier"][tier]
             lines.append(
                 f"  {tier:<6} batches={s['batches']:>3}  "
                 f"min={s['min']:>7.2f}  avg={s['avg']:>7.2f}  med={s['median']:>7.2f}  "
                 f"max={s['max']:>7.2f}  files/s={s['avg_files_sec']:>7.1f}  "
-                f"agg={s['aggregate_mb_s']:>7.2f}"
+                f"agg={s['aggregate_mb_s']:>7.2f}  batch/s={s.get('batches_per_sec', 0):>6.3f}"
             )
         ov = tp.get("overall", {})
         if ov:
             lines.append(
                 f"  {'ALL':<6} batches={ov['batches']:>3}  "
                 f"min={ov['min']:>7.2f}  avg={ov['avg']:>7.2f}  med={ov['median']:>7.2f}  "
-                f"max={ov['max']:>7.2f}  {'':>16}  agg={ov['aggregate_mb_s']:>7.2f}"
+                f"max={ov['max']:>7.2f}  {'':>16}  agg={ov['aggregate_mb_s']:>7.2f}  "
+                f"batch/s={ov.get('batches_per_sec', 0):>6.3f}"
             )
         lines += ["", "Batch processing time (seconds per batch, grouped by tier):"]
         for tier in tp.get("tiers", []):
