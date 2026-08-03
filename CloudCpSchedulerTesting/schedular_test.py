@@ -719,7 +719,7 @@ def parse_cloudcp_log(path: Path, tier_order: list[str],
                 "elapsed": float(sm.group(2)),
                 "files": files, "bytes": nbytes,
                 "files_sec": float(sm.group(8)),
-                "throughput": float(sm.group(9)),
+                "throughput": float(sm.group(9)) * 1.048576,  # MiB/s -> MB/s
                 "tier": _tier_for_avg_size(avg_size, tier_sizes),
             })
     if not stats:
@@ -749,6 +749,7 @@ def parse_cloudcp_log(path: Path, tier_order: list[str],
         if not tb:
             continue
         st = _minmaxavg([b["throughput"] for b in tb])
+        el = _minmaxavg([b["elapsed"] for b in tb])
         tot_bytes = sum(b["bytes"] for b in tb)
         span = max(b["t_done"] for b in tb) - min(b["t_start"] for b in tb)
         per_tier[tier] = {
@@ -758,17 +759,22 @@ def parse_cloudcp_log(path: Path, tier_order: list[str],
             "min": round(st["min"], 3), "max": round(st["max"], 3),
             "avg": round(st["avg"], 3), "median": round(st["median"], 3),
             "avg_files_sec": round(sum(b["files_sec"] for b in tb) / len(tb), 2),
-            "aggregate_mib_s": round((tot_bytes / (1024 * 1024) / span) if span > 0 else 0.0, 3),
+            "aggregate_mb_s": round((tot_bytes / 1e6 / span) if span > 0 else 0.0, 3),
+            "elapsed_min": round(el["min"], 2), "elapsed_max": round(el["max"], 2),
+            "elapsed_avg": round(el["avg"], 2), "elapsed_median": round(el["median"], 2),
         }
 
     ov = _minmaxavg([b["throughput"] for b in batches])
+    el = _minmaxavg([b["elapsed"] for b in batches])
     all_bytes = sum(b["bytes"] for b in batches)
     wall = max(b["t_done"] for b in batches) - min(b["t_start"] for b in batches)
     overall = {
         "batches": len(batches), "bytes": all_bytes,
         "min": round(ov["min"], 3), "max": round(ov["max"], 3),
         "avg": round(ov["avg"], 3), "median": round(ov["median"], 3),
-        "aggregate_mib_s": round((all_bytes / (1024 * 1024) / wall) if wall > 0 else 0.0, 3),
+        "aggregate_mb_s": round((all_bytes / 1e6 / wall) if wall > 0 else 0.0, 3),
+        "elapsed_min": round(el["min"], 2), "elapsed_max": round(el["max"], 2),
+        "elapsed_avg": round(el["avg"], 2), "elapsed_median": round(el["median"], 2),
         "wall_sec": round(wall, 2),
     }
     return {"batches": batches, "per_tier": per_tier, "overall": overall,
@@ -978,24 +984,27 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   </section>
 
   <section>
-    <h2>Throughput — per batch &amp; per category</h2>
+    <h2>Throughput &amp; per-batch time — per batch &amp; per category</h2>
     <div class="sub" id="thrOverall"></div>
     <canvas id="thrScatterCv" height="280"></canvas>
-    <div class="muted" style="text-align:center">Per-batch throughput (MiB/s, log scale) vs completion time — colored by tier</div>
+    <div class="muted" style="text-align:center">Per-batch throughput (MB/s, log scale) vs completion time — colored by tier</div>
     <div class="row" style="margin-top:14px">
       <div>
         <canvas id="thrBarsCv" height="240"></canvas>
-        <div class="muted" style="text-align:center">Avg throughput per tier (log) · whisker = min–max</div>
+        <div class="muted" style="text-align:center">Avg throughput per tier (MB/s, log) · whisker = min–max</div>
       </div>
       <div>
-        <table id="thrTbl">
-          <thead><tr><th>Tier</th><th>Batches</th><th>Files</th><th>Bytes</th>
-          <th>Min</th><th>Avg</th><th>Med</th><th>Max</th><th>files/s</th><th>Aggregate</th></tr></thead>
-          <tbody></tbody>
-        </table>
-        <div class="muted">throughput in MiB/s · Aggregate = tier bytes ÷ tier wall-clock span</div>
+        <canvas id="elapBarsCv" height="240"></canvas>
+        <div class="muted" style="text-align:center">Avg processing time per batch per tier (s) · whisker = min–max</div>
       </div>
     </div>
+    <table id="thrTbl" style="margin-top:14px">
+      <thead><tr><th>Tier</th><th>Batches</th><th>Files</th><th>Data</th>
+      <th>Min</th><th>Avg</th><th>Med</th><th>Max</th><th>files/s</th><th>Agg MB/s</th>
+      <th>s/batch min</th><th>s/batch avg</th><th>s/batch max</th></tr></thead>
+      <tbody></tbody>
+    </table>
+    <div class="muted">throughput in MB/s · Agg = tier bytes ÷ tier wall-clock span · s/batch = processing time from cloudcp.log elapsed</div>
   </section>
 
   <section>
@@ -1011,6 +1020,7 @@ const TIERS = DATA.tiers, COL = DATA.tier_colors;
 const TL = DATA.timeline;
 const fmt = n => (n>=1e6?(n/1e6).toFixed(1)+'M':n>=1e3?(n/1e3).toFixed(1)+'k':(''+n));
 const bytes = n => {const u=['B','KB','MB','GB','TB'];let i=0,x=n;while(x>=1024&&i<u.length-1){x/=1024;i++;}return x.toFixed(x<10?2:0)+' '+u[i];};
+const dsize = n => {const u=['B','KB','MB','GB','TB'];let i=0,x=n;while(x>=1000&&i<u.length-1){x/=1000;i++;}return x.toFixed(x<10?2:0)+' '+u[i];};
 
 document.getElementById('ttl').textContent = DATA.dataset.id + '  ·  transfer ' + DATA.transfer_id;
 document.getElementById('subttl').textContent =
@@ -1050,19 +1060,22 @@ const THR=DATA.throughput||{batches:[],per_tier:{},overall:{},tiers:[]};
 {
   const ov=THR.overall||{};
   document.getElementById('thrOverall').textContent = ov.batches
-    ? (ov.batches+' batches · avg '+(ov.avg||0).toFixed(2)+' MiB/s · peak '+(ov.max||0).toFixed(2)
-       +' MiB/s · aggregate '+(ov.aggregate_mib_s||0).toFixed(2)+' MiB/s over '+(ov.wall_sec||0).toFixed(1)+'s')
+    ? (ov.batches+' batches · avg '+(ov.avg||0).toFixed(2)+' MB/s · peak '+(ov.max||0).toFixed(2)
+       +' MB/s · aggregate '+(ov.aggregate_mb_s||0).toFixed(2)+' MB/s · avg '+(ov.elapsed_avg||0).toFixed(2)
+       +'s/batch (max '+(ov.elapsed_max||0).toFixed(2)+'s) over '+(ov.wall_sec||0).toFixed(1)+'s')
     : 'no cloudcp.log throughput data';
   const ttb=document.querySelector('#thrTbl tbody');
   (THR.tiers||[]).forEach(t=>{const s=THR.per_tier[t];
     ttb.innerHTML+='<tr><td><i class="dot" style="background:'+(COL[t]||'#888')+'"></i> '+t+'</td>'
-      +'<td>'+s.batches+'</td><td>'+fmt(s.files)+'</td><td>'+bytes(s.bytes)+'</td>'
+      +'<td>'+s.batches+'</td><td>'+fmt(s.files)+'</td><td>'+dsize(s.bytes)+'</td>'
       +'<td>'+s.min.toFixed(2)+'</td><td>'+s.avg.toFixed(2)+'</td><td>'+s.median.toFixed(2)+'</td><td>'+s.max.toFixed(2)+'</td>'
-      +'<td>'+s.avg_files_sec.toFixed(1)+'</td><td>'+s.aggregate_mib_s.toFixed(2)+'</td></tr>';});
+      +'<td>'+s.avg_files_sec.toFixed(1)+'</td><td>'+s.aggregate_mb_s.toFixed(2)+'</td>'
+      +'<td>'+s.elapsed_min.toFixed(2)+'</td><td>'+s.elapsed_avg.toFixed(2)+'</td><td>'+s.elapsed_max.toFixed(2)+'</td></tr>';});
   if(ov.batches){ttb.innerHTML+='<tr style="font-weight:700"><td>ALL</td><td>'+ov.batches+'</td><td>-</td>'
-      +'<td>'+bytes(ov.bytes||0)+'</td><td>'+(ov.min||0).toFixed(2)+'</td><td>'+(ov.avg||0).toFixed(2)+'</td>'
+      +'<td>'+dsize(ov.bytes||0)+'</td><td>'+(ov.min||0).toFixed(2)+'</td><td>'+(ov.avg||0).toFixed(2)+'</td>'
       +'<td>'+(ov.median||0).toFixed(2)+'</td><td>'+(ov.max||0).toFixed(2)+'</td><td>-</td>'
-      +'<td>'+(ov.aggregate_mib_s||0).toFixed(2)+'</td></tr>';}
+      +'<td>'+(ov.aggregate_mb_s||0).toFixed(2)+'</td>'
+      +'<td>'+(ov.elapsed_min||0).toFixed(2)+'</td><td>'+(ov.elapsed_avg||0).toFixed(2)+'</td><td>'+(ov.elapsed_max||0).toFixed(2)+'</td></tr>';}
 }
 function drawThrScatter(){
   const cv=document.getElementById('thrScatterCv'); const {c,w,h}=prep(cv); clear(c,w,h);
@@ -1084,7 +1097,7 @@ function drawThrScatter(){
     c.fillStyle=COL[b.tier]||'#888';c.globalAlpha=0.8;
     c.beginPath();c.arc(x,y,3,0,6.283);c.fill();c.globalAlpha=1;});
   c.fillStyle='#8b949e';c.textAlign='center';c.fillText(tMax.toFixed(0)+'s',w-24,h-pad+14);
-  c.textAlign='left';c.fillText('MiB/s (log)',pad-40,12);
+  c.textAlign='left';c.fillText('MB/s (log)',pad-40,12);
 }
 function drawThrBars(){
   const cv=document.getElementById('thrBarsCv'); const {c,w,h}=prep(cv); clear(c,w,h);
@@ -1102,7 +1115,23 @@ function drawThrBars(){
     c.moveTo(x+bwidth/2,Y(Math.max(s.min,0.01)));c.lineTo(x+bwidth/2,Y(Math.max(s.max,0.01)));c.stroke();
     c.fillStyle='#e6edf3';c.textAlign='center';c.fillText(s.avg.toFixed(1),x+bwidth/2,yTop-4);
     c.fillStyle='#8b949e';c.fillText(t,x+bwidth/2,h-pad+12);});
-  c.textAlign='left';c.fillStyle='#8b949e';c.fillText('avg MiB/s (log)',pad,12);
+  c.textAlign='left';c.fillStyle='#8b949e';c.fillText('avg MB/s (log)',pad,12);
+}
+function drawElapBars(){
+  const cv=document.getElementById('elapBarsCv'); const {c,w,h}=prep(cv); clear(c,w,h);
+  const tiers=THR.tiers||[]; const pad=40; axis(c,w,h,pad);
+  if(!tiers.length){c.fillStyle='#8b949e';c.fillText('no throughput data',20,30);return;}
+  const maxV=Math.max(0.1,...tiers.map(t=>THR.per_tier[t].elapsed_max));
+  const Y=v=>(h-pad-8)-(h-pad-20)*(v/maxV);
+  const bw=(w-pad-10)/tiers.length; c.font='11px sans-serif';
+  tiers.forEach((t,i)=>{const s=THR.per_tier[t];const x=pad+i*bw+bw*0.2;const bwidth=bw*0.6;
+    const yTop=Y(s.elapsed_avg);
+    c.fillStyle=COL[t]||'#888';c.fillRect(x,yTop,bwidth,(h-pad)-yTop);
+    c.strokeStyle='#e6edf3';c.lineWidth=1.5;c.beginPath();
+    c.moveTo(x+bwidth/2,Y(s.elapsed_min));c.lineTo(x+bwidth/2,Y(s.elapsed_max));c.stroke();
+    c.fillStyle='#e6edf3';c.textAlign='center';c.fillText(s.elapsed_avg.toFixed(1)+'s',x+bwidth/2,yTop-4);
+    c.fillStyle='#8b949e';c.fillText(t,x+bwidth/2,h-pad+12);});
+  c.textAlign='left';c.fillStyle='#8b949e';c.fillText('avg seconds/batch',pad,12);
 }
 
 // ---- dataset structure & enumeration expectation ----
@@ -1251,7 +1280,7 @@ document.getElementById('resetBtn').onclick=()=>{stop();idx=0;renderFrame(0);};
 document.getElementById('speed').onchange=()=>{if(playing)start();};
 scrub.oninput=e=>{stop();idx=parseInt(e.target.value,10);renderFrame(idx);};
 
-function redraw(){renderFrame(idx);drawTS();drawHist();drawThrScatter();drawThrBars();}
+function redraw(){renderFrame(idx);drawTS();drawHist();drawThrScatter();drawThrBars();drawElapBars();}
 window.addEventListener('resize',redraw);
 redraw();
 </script>
@@ -1444,21 +1473,35 @@ def write_summary_txt(path: Path, meta, enum_payload, cap_data, csv_summary, str
     ]
     tp = throughput or {}
     if tp.get("per_tier"):
-        lines += ["", "Throughput (MiB/s per batch, grouped by tier):"]
+        lines += ["", "Throughput (MB/s per batch, grouped by tier):"]
         for tier in tp.get("tiers", []):
             s = tp["per_tier"][tier]
             lines.append(
                 f"  {tier:<6} batches={s['batches']:>3}  "
                 f"min={s['min']:>7.2f}  avg={s['avg']:>7.2f}  med={s['median']:>7.2f}  "
                 f"max={s['max']:>7.2f}  files/s={s['avg_files_sec']:>7.1f}  "
-                f"agg={s['aggregate_mib_s']:>7.2f}"
+                f"agg={s['aggregate_mb_s']:>7.2f}"
             )
         ov = tp.get("overall", {})
         if ov:
             lines.append(
                 f"  {'ALL':<6} batches={ov['batches']:>3}  "
                 f"min={ov['min']:>7.2f}  avg={ov['avg']:>7.2f}  med={ov['median']:>7.2f}  "
-                f"max={ov['max']:>7.2f}  {'':>16}  agg={ov['aggregate_mib_s']:>7.2f}"
+                f"max={ov['max']:>7.2f}  {'':>16}  agg={ov['aggregate_mb_s']:>7.2f}"
+            )
+        lines += ["", "Batch processing time (seconds per batch, grouped by tier):"]
+        for tier in tp.get("tiers", []):
+            s = tp["per_tier"][tier]
+            lines.append(
+                f"  {tier:<6} batches={s['batches']:>3}  "
+                f"min={s['elapsed_min']:>7.2f}s  avg={s['elapsed_avg']:>7.2f}s  "
+                f"med={s['elapsed_median']:>7.2f}s  max={s['elapsed_max']:>7.2f}s"
+            )
+        if ov:
+            lines.append(
+                f"  {'ALL':<6} batches={ov['batches']:>3}  "
+                f"min={ov['elapsed_min']:>7.2f}s  avg={ov['elapsed_avg']:>7.2f}s  "
+                f"med={ov['elapsed_median']:>7.2f}s  max={ov['elapsed_max']:>7.2f}s"
             )
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
@@ -1531,7 +1574,7 @@ th{color:#8b949e}a{color:#58a6ff}.ok{color:#3fb950}.bad{color:#f85149}
 <header><h1>Scheduler Test — Combined Report</h1><div class="sub">__AGG__ · __TS__</div></header>
 <div class="wrap">
 <table><thead><tr><th>Dataset</th><th>Transfer</th><th>Duration (s)</th><th>Files</th>
-<th>Success</th><th>Failed</th><th>Avg MiB/s</th><th>Peak MiB/s</th><th>Exit</th><th>Report</th></tr></thead>
+<th>Success</th><th>Failed</th><th>Avg MB/s</th><th>Peak MB/s</th><th>Exit</th><th>Report</th></tr></thead>
 <tbody>__ROWS__</tbody></table>
 </div></body></html>
 """
