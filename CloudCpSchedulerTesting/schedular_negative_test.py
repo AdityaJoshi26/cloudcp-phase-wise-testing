@@ -45,6 +45,7 @@ import datetime as _dt
 import json
 import logging
 import os
+import re
 import shutil
 import signal
 import stat
@@ -536,6 +537,42 @@ def _evaluate(expect: dict, rc: int | None, timed_out: bool, csv_summary: dict,
     return ok, checks
 
 
+# ids already handed out this run, so we never reuse one even after cleanup
+_USED_IDS: set[int] = set()
+
+
+def _scan_ids(logs_dir: str, batchmeta_dir: str) -> set[int]:
+    """Every transfer id already present in the host logs dir or batchmeta."""
+    ids: set[int] = set()
+    for d, pat in ((logs_dir, r"cloud_transfer_(\d+)"),
+                   (batchmeta_dir, r"transfer_(\d+)")):
+        p = Path(d)
+        if not p.is_dir():
+            continue
+        for child in p.iterdir():
+            m = re.fullmatch(pat, child.name)
+            if m:
+                ids.add(int(m.group(1)))
+    return ids
+
+
+def _alloc_transfer_id(cfg: NegConfig) -> int:
+    """Pick a transfer id with no existing host log / batchmeta so each case reads
+    its OWN fresh results CSV. The sandbox batchmeta is empty, so the shared host
+    paths are what we must avoid colliding with."""
+    existing = _scan_ids(cfg.transfer_logs_dir, st.DEF_BATCHMETA) | _USED_IDS
+    nid = (max(existing) + 1) if existing else 501
+    _USED_IDS.add(nid)
+    return nid
+
+
+def _cleanup_transfer_log(logs_dir: str, tr_id: int) -> None:
+    """Remove the host-side cloud_transfer_<id> log this case created."""
+    d = Path(logs_dir) / f"cloud_transfer_{tr_id}"
+    if d.is_dir():
+        shutil.rmtree(d, ignore_errors=True)
+
+
 def run_case(case: NegCase, cfg: NegConfig, out_root: Path) -> dict:
     LOG.info("=" * 70)
     LOG.info("CASE %s — %s", case.id, case.title)
@@ -559,7 +596,7 @@ def run_case(case: NegCase, cfg: NegConfig, out_root: Path) -> dict:
             result["note"] = setup.skip
             return result
 
-        tr_id = setup.forced_id or st.next_transfer_id(str(sb.batchmeta))
+        tr_id = setup.forced_id or _alloc_transfer_id(cfg)
         transfer_dir = sb.batchmeta / f"transfer_{tr_id}"
         transfer_dir.mkdir(parents=True, exist_ok=True)
         for name, data in setup.pre_transfer_files.items():
@@ -607,11 +644,15 @@ def run_case(case: NegCase, cfg: NegConfig, out_root: Path) -> dict:
         csv_summary = {"total": 0, "status_counts": {}, "success": 0, "failed": 0,
                        "total_bytes": 0, "completions_rel": [], "completion_span_sec": 0}
         csv_src = st.find_results_csv(cfg.transfer_logs_dir, tr_id)
+        LOG.info("transfer_id=%s results_csv=%s", tr_id, csv_src or "<none>")
         if csv_src:
             try:
                 csv_summary = st.parse_results_csv(csv_src, start_dt.year)
             except Exception as exc:  # noqa: BLE001
                 LOG.warning("could not parse results CSV: %s", exc)
+
+        # keep the machine clean: drop the host-side log this case just created
+        _cleanup_transfer_log(cfg.transfer_logs_dir, tr_id)
 
         ok, checks = _evaluate(setup.expect, run_info["rc"], run_info["timed_out"],
                                csv_summary, stderr_path)

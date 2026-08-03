@@ -282,6 +282,54 @@ Scheduler invocation (what the harness runs; fixed pieces mirror the host layout
 > (weight ratio, caps, refill, work-stealing), the `SCH-EN-*`/`SCH-BA-*` oracle checks, and the
 > `SCH-CF-*` config cases are **still to be added**.
 
+### 7a. Negative / fault-injection suite (`schedular_negative_test.py`)
+
+Location:
+[../CloudCpSchedulerTesting/schedular_negative_test.py](../CloudCpSchedulerTesting/schedular_negative_test.py).
+Driven **through** `schedular_test.py` (it delegates on any `--negative*` flag) so there is one
+entry point. Every NEG-* case builds and destroys its **own tiny sandbox**
+(`neg_<id>/{data,batchmeta,logs}`) and injects faults only via the sandbox filesystem, CLI
+overrides, child env, and signals — **no host config, creds, or services are touched**. A
+controlled failure counts as PASS; POSIX-only faults auto-**SKIP** off-POSIX and under `--dry-run`.
+
+```bash
+cd CloudCpSchedulerTesting
+python3 schedular_test.py --negative-list          # list every NEG-* case, then exit
+python3 schedular_test.py --negative               # run the whole negative suite
+python3 schedular_test.py --negative-case NEG-ENUM-03           # one case
+python3 schedular_test.py --negative-case NEG-ENUM-03,NEG-LIFE-01  # several (comma-separated)
+python3 schedular_test.py --negative --neg-timeout 120          # per-case wall-clock bound (s)
+python3 schedular_test.py --negative --dry-run     # preview off-host (all POSIX faults SKIP)
+```
+
+- **Output** (under `CloudCpSchedulerTesting/sch_test_runs/negative_<timestamp>/`, zipped to
+  `negative_<timestamp>.zip`): `negative_report.html` (PASS/FAIL/SKIP per case with the injected
+  fault + expected/observed), `negative_results.json`, and per-case `neg_<id>/` sandboxes (removed
+  after evaluation).
+- **No spec files / datagen** — each case synthesises its own data (`make_tier`/`write_file`,
+  sparse), so it runs anywhere with near-zero disk footprint.
+
+### 7b. Full suite in one go (positive + negative)
+
+There is no single flag that runs both (the `--negative` path delegates before the positive flow),
+so chain the two runs. They write to separate output folders, so nothing collides:
+
+```bash
+cd CloudCpSchedulerTesting
+# positive (all datasets + combined) then the negative suite, sequentially:
+python3 schedular_test.py --all && python3 schedular_test.py --negative
+
+# off-host dry preview of the whole thing (safe on Windows / no broker):
+python3 schedular_test.py --all --dry-run ; python3 schedular_test.py --negative --dry-run
+```
+
+- `&&` runs the negative suite only if the positive run exits 0; use `;` to always run both.
+- On PowerShell (Windows) use `;` between the two commands (there is no `&&`); expect the positive
+  run to no-op past preview since the broker is Linux-only — `--dry-run` is the meaningful mode
+  off-host.
+- Reports land side by side: positive under `sch_test_runs/report_<id>/`, negative under
+  `sch_test_runs/negative_<timestamp>/`.
+
 ---
 
 ## 8. `batch_summary` expectation helper (to be added)
@@ -307,7 +355,7 @@ usage: batch_summary_expect.py --dataset DS-Pn-nn --config /etc/bryck/bryckcloud
 | Phase | Primary tools |
 |---|---|
 | Batch Builder | `datagen`, `generate_specs.py`, `bcloud_src_enum.py --batch-only`, `dataset_validator.py`, `batch_summary_expect.py` (TBA) |
-| Scheduler | `generate_dataset.py`, `schedular_test.py` (runner + slot/replay capture), broker (config `NETWORK_PROFILE`); slot-ratio/cap assertions (TBA) |
+| Scheduler | `generate_dataset.py`, `schedular_test.py` (runner + slot/replay capture), `schedular_negative_test.py` (fault injection, via `--negative`), broker (config `NETWORK_PROFILE`); slot-ratio/cap assertions (TBA) |
 | CloudCP Binary | `make_batches.py`, `run_cloudcp_tests.py`, `cloudcp` |
 | Reporting | verification engine, `dataset_validator.py` (counts), status-injection fixtures (TBA) |
 | Fallback | fault-injection proxy (TBA), fallback worker |
