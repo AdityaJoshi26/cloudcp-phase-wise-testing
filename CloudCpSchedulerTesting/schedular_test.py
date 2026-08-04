@@ -142,6 +142,123 @@ _CLOUDCP_STATS_RE = re.compile(
 )
 _CLOUDCP_BATCH_RE = re.compile(r"\[Batch\]\[(\d+)\]\s+done\s+records=(\d+)")
 
+# journal PERF lines (from the broker), e.g.:
+# "Aug 03 12:29:52 host bryckcloud[2757105]: PERF batch=batch_000027.txt files_count:50
+#  total_size:5242880000 upload=78.50s total=78.50s rc=0 batch_file:.../transfer_541/batches/completed/medium/batch_000027.txt"
+_PERF_RE = re.compile(
+    r"PERF\s+batch=(\S+)\s+files_count:(\d+)\s+total_size:(\d+)\s+"
+    r"upload=([\d.]+)s\s+total=([\d.]+)s\s+rc=(-?\d+)\s+batch_file:(\S+)"
+)
+_PERF_CAT_RE = re.compile(r"/completed/([^/]+)/")
+
+# --- expected config.json values (preflight validation) ------------------------------
+EXPECTED_ENDPOINT = "https://10.10.10.103:9000"
+EXPECTED_TRANSFER_FLAGS = {
+    "PERF_STATS": "True",
+    "TXR_BATCH_VERIFYSIZE": "True",
+    "TRANSFER_DISPATCH": "broker",
+}
+EXPECTED_CLOUDCP = {
+    "MULTIPART_THRESHOLD_MB": 64,
+    "MULTIPART_CHUNKSIZE_MB": 64,
+    "SKIP_EXISTING": True,
+    "TRANSFER_STATS": True,
+    "STATS_INTERVAL_SEC": 0,
+}
+EXPECTED_TEST = {
+    "SIM_TRANSFER": False,
+    "SIM_SLEEP_TINY_MS": 0,
+    "SIM_SLEEP_SMALL_MS": 0,
+    "SIM_SLEEP_MEDIUM_MS": 0,
+    "SIM_SLEEP_LARGE_MS": 0,
+    "SIM_SLEEP_DOWNLOAD_MS": 0,
+    "FAULT_FAIL_PERCENT": 0,
+    "FAULT_CRASH_PERCENT": 0,
+    "FAULT_CRASH_MODE": "abort",
+    "FAULT_SEED": 0,
+}
+
+
+# =====================================================================================
+# Preflight — host + config.json validation
+# =====================================================================================
+def _diff_block(name: str, expected: dict, actual) -> list[str]:
+    """Deep exact-match report for a config block (missing/wrong/extra keys)."""
+    if not isinstance(actual, dict):
+        return [f"{name} block is missing or not an object (found {type(actual).__name__})"]
+    out = []
+    for k, v in expected.items():
+        if k not in actual:
+            out.append(f"{name}.{k} missing, expected {v!r}")
+        elif actual[k] != v:
+            out.append(f"{name}.{k} is {actual[k]!r}, expected {v!r}")
+    for k in actual:
+        if k not in expected:
+            out.append(f"{name}.{k} is unexpected ({actual[k]!r}); remove it")
+    return out
+
+
+def preflight_checks(args) -> None:
+    """Validate datagen + config.json before any transfer runs.
+
+    Collects every problem and prints them together. In a real run a failure
+    aborts (SystemExit); under --dry-run or --skip-config-check it only warns.
+    """
+    problems: list[str] = []
+
+    dg = Path(args.datagen)
+    if not dg.is_file():
+        problems.append(f"datagen binary not found at {args.datagen}")
+    elif not os.access(dg, os.X_OK):
+        problems.append(f"datagen binary is not executable: {args.datagen}")
+
+    cfg = None
+    try:
+        with open(args.config, encoding="utf-8") as fh:
+            cfg = json.load(fh)
+    except FileNotFoundError:
+        problems.append(f"config.json not found at {args.config}")
+    except (OSError, json.JSONDecodeError) as exc:
+        problems.append(f"config.json unreadable/invalid ({args.config}): {exc}")
+
+    if cfg is not None:
+        local_aws = (cfg.get("CLOUD", {}) or {}).get("LOCAL_AWS")
+        if getattr(args, "endpoint_overridden", False):
+            if local_aws != args.endpoint_url:
+                problems.append(
+                    f"CLOUD.LOCAL_AWS is {local_aws!r} but --endpoint-url was set to "
+                    f"{args.endpoint_url!r}; they must match")
+        elif local_aws != EXPECTED_ENDPOINT:
+            problems.append(
+                f"CLOUD.LOCAL_AWS is {local_aws!r}; for the aditya bucket the "
+                f"configuration in {args.config} should be {EXPECTED_ENDPOINT!r}")
+
+        transfer = cfg.get("TRANSFER", {}) or {}
+        for k, v in EXPECTED_TRANSFER_FLAGS.items():
+            if transfer.get(k) != v:
+                problems.append(f"TRANSFER.{k} is {transfer.get(k)!r}, expected {v!r}")
+
+        for name, expected in (("CLOUDCP", EXPECTED_CLOUDCP), ("TEST", EXPECTED_TEST)):
+            block = cfg.get(name)
+            if block != expected:
+                problems.extend(_diff_block(name, expected, block))
+
+    if not problems:
+        LOG.info("preflight: datagen + config.json OK")
+        return
+
+    msg = "\n".join(
+        ["preflight configuration check FAILED:"]
+        + [f"  - {p}" for p in problems]
+        + ["", "Fix the configuration(s) above first, then re-run."]
+    )
+    if args.dry_run or getattr(args, "skip_config_check", False):
+        LOG.warning("%s", msg)
+        LOG.warning("continuing despite failures (%s)",
+                    "dry-run" if args.dry_run else "--skip-config-check")
+        return
+    raise SystemExit("error: " + msg)
+
 
 # =====================================================================================
 # Catalog / dataset resolution
@@ -354,6 +471,7 @@ class JournalCapture:
         self.pending_path = log_dir / f"pending_{tr_id}.log"
         self.free_path = log_dir / f"free_workers_{tr_id}.log"
         self.running_path = log_dir / f"running_workers_{tr_id}.log"
+        self.perf_path = log_dir / f"perf_{tr_id}.log"
         self.raw_path = log_dir / f"raw_{tr_id}.log"
         self._since = since
         self._proc: subprocess.Popen | None = None
@@ -362,7 +480,8 @@ class JournalCapture:
 
     def start(self) -> None:
         """Spawn the follower and block until it is attached (lead settle)."""
-        for p in (self.pending_path, self.free_path, self.running_path, self.raw_path):
+        for p in (self.pending_path, self.free_path, self.running_path,
+                  self.perf_path, self.raw_path):
             p.write_text("", encoding="utf-8")
         if self.dry_run:
             LOG.info("[dry-run] would start journalctl follower for tag %s", self.tag)
@@ -387,6 +506,7 @@ class JournalCapture:
         pend = self.pending_path.open("a", encoding="utf-8")
         free = self.free_path.open("a", encoding="utf-8")
         run = self.running_path.open("a", encoding="utf-8")
+        perf = self.perf_path.open("a", encoding="utf-8")
         raw = self.raw_path.open("a", encoding="utf-8")
         try:
             assert self._proc and self._proc.stdout
@@ -404,10 +524,13 @@ class JournalCapture:
                 elif "Running with workers" in line:
                     run.write(line)
                     run.flush()
+                elif "PERF batch=" in line and f"transfer_{self.tr_id}" in line:
+                    perf.write(line)
+                    perf.flush()
         except Exception as exc:  # noqa: BLE001
             LOG.debug("journal reader stopped: %s", exc)
         finally:
-            for fh in (pend, free, run, raw):
+            for fh in (pend, free, run, perf, raw):
                 fh.close()
 
     def stop(self) -> None:
@@ -784,6 +907,85 @@ def parse_cloudcp_log(path: Path, tier_order: list[str],
 
 
 # =====================================================================================
+# Step 6c — batch completion from journal PERF lines (per batch, per category)
+# =====================================================================================
+def _mode_rounded(vals: list[float], ndigits: int = 1) -> float:
+    """Most frequent value after rounding to `ndigits` decimals (ties -> smallest)."""
+    if not vals:
+        return 0.0
+    counts: dict[float, int] = {}
+    for v in vals:
+        r = round(v, ndigits)
+        counts[r] = counts.get(r, 0) + 1
+    best = max(counts.values())
+    return min(k for k, c in counts.items() if c == best)
+
+
+def parse_perf_log(path: Path, tier_order: list[str]) -> dict:
+    """Parse per-batch completion from the broker's journal PERF lines.
+
+    Each completed batch emits a `PERF batch=<name> files_count:<n> total_size:<b>
+    upload=<u>s total=<t>s rc=<rc> batch_file:.../completed/<tier>/<name>` line.
+    Batches are grouped by the path's <tier>; per tier we report min/max/mode +
+    avg for both upload and total time, plus the count of rc!=0 batches.
+    """
+    empty = {"batches": [], "per_tier": {}, "overall": {}, "tiers": []}
+    if not path.is_file():
+        return empty
+    text = path.read_text(encoding="utf-8", errors="replace")
+
+    batches: list[dict] = []
+    for line in text.splitlines():
+        m = _PERF_RE.search(line)
+        if not m:
+            continue
+        cm = _PERF_CAT_RE.search(m.group(7))
+        tier = cm.group(1).lower() if cm else "unknown"
+        batches.append({
+            "batch": m.group(1),
+            "tier": tier,
+            "files": int(m.group(2)),
+            "bytes": int(m.group(3)),
+            "upload": round(float(m.group(4)), 2),
+            "total": round(float(m.group(5)), 2),
+            "rc": int(m.group(6)),
+            "order": len(batches),
+        })
+    if not batches:
+        return empty
+
+    def _stats(rows: list[dict]) -> dict:
+        totals = [b["total"] for b in rows]
+        uploads = [b["upload"] for b in rows]
+        return {
+            "batches": len(rows),
+            "files": sum(b["files"] for b in rows),
+            "bytes": sum(b["bytes"] for b in rows),
+            "total_min": round(min(totals), 2), "total_max": round(max(totals), 2),
+            "total_avg": round(sum(totals) / len(totals), 2),
+            "total_mode": round(_mode_rounded(totals), 1),
+            "upload_min": round(min(uploads), 2), "upload_max": round(max(uploads), 2),
+            "upload_avg": round(sum(uploads) / len(uploads), 2),
+            "upload_mode": round(_mode_rounded(uploads), 1),
+            "rc_fail": sum(1 for b in rows if b["rc"] != 0),
+        }
+
+    order = tier_order + [t for t in {b["tier"] for b in batches} if t not in tier_order]
+    per_tier = {}
+    for tier in order:
+        tb = [b for b in batches if b["tier"] == tier]
+        if tb:
+            per_tier[tier] = _stats(tb)
+
+    return {
+        "batches": batches,
+        "per_tier": per_tier,
+        "overall": _stats(batches),
+        "tiers": [t for t in order if t in per_tier],
+    }
+
+
+# =====================================================================================
 # Step 7 — HTML report (self-contained)
 # =====================================================================================
 def _histogram(values: list[float], nbins: int = 40) -> dict:
@@ -832,7 +1034,7 @@ def build_structure_payload(dataset: dict) -> dict:
 
 
 def build_report_payload(dataset, tr_id, enum_payload, cap_data, csv_summary,
-                         meta, batch_cfg, tier_order, structure, throughput) -> dict:
+                         meta, batch_cfg, tier_order, structure, throughput, perf) -> dict:
     tiers = list(dict.fromkeys(tier_order + cap_data.get("tiers_seen", [])))
     return {
         "meta": meta,
@@ -850,6 +1052,7 @@ def build_report_payload(dataset, tr_id, enum_payload, cap_data, csv_summary,
         "log_counts": cap_data["counts"],
         "csv_summary": csv_summary,
         "throughput": throughput,
+        "perf": perf,
         "completion_hist": _histogram(csv_summary.get("completions_rel", [])),
     }
 
@@ -904,6 +1107,13 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   .tip b{color:var(--acc)}
   .tip .r{display:flex;justify-content:space-between;gap:14px}
   .tip .r span:last-child{font-weight:700}
+  details{background:#0b0f14;border:1px solid var(--line);border-radius:8px;margin:8px 0;padding:6px 12px}
+  details[open]{padding-bottom:12px}
+  summary{cursor:pointer;font-size:13px;padding:4px 0;user-select:none}
+  summary::-webkit-details-marker{color:var(--acc)}
+  details table{margin-top:8px}
+  details th{cursor:pointer;user-select:none}
+  tr.bad td{background:rgba(248,81,73,.10)}
   @media(max-width:760px){.row{grid-template-columns:1fr}}
 </style>
 </head>
@@ -1020,6 +1230,30 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       <tbody></tbody>
     </table>
     <div class="muted">MB/s = per-batch rate (min/avg/med/max) · Agg MB/s = tier bytes ÷ tier wall-clock span · batches/s = batches ÷ tier span · s/batch = per-batch processing time from cloudcp.log elapsed</div>
+  </section>
+
+  <section>
+    <h2>Batch completion — broker PERF (journal)</h2>
+    <div class="sub" id="perfOverall"></div>
+    <div class="metricdefs">
+      <div><b>total s</b><br>Full batch completion time from the broker <code>PERF … total=</code> field. Primary metric; lower is faster.</div>
+      <div><b>upload s</b><br>Upload-phase seconds from the same PERF line (<code>upload=</code>).</div>
+      <div><b>mode</b><br>Most frequent completion time per tier (total seconds rounded to 0.1s).</div>
+    </div>
+    <div class="row">
+      <div>
+        <div class="chartwrap"><canvas id="perfBarsCv" height="240"></canvas></div>
+        <div class="muted" style="text-align:center">Avg batch completion per tier (total s) · whisker = min–max · hover a bar</div>
+      </div>
+      <div>
+        <div class="chartwrap"><canvas id="perfHistCv" height="240"></canvas></div>
+        <div class="muted" style="text-align:center">Completion-time distribution (total s) · stacked by tier</div>
+      </div>
+    </div>
+    <div class="chartwrap" style="margin-top:14px"><canvas id="perfScatterCv" height="280"></canvas></div>
+    <div class="muted" style="text-align:center">Per-batch completion time (total s) vs completion order · colored by tier · red ring = rc≠0 · hover for detail</div>
+    <div id="perfGroups" style="margin-top:14px"></div>
+    <div class="muted">Click a tier to expand its batches · click a column header to sort · total = full batch time, upload = upload phase, both from the journal PERF line</div>
   </section>
 
   <section>
@@ -1190,6 +1424,116 @@ function attachHover(id){
 }
 ['thrScatterCv','thrBarsCv','elapBarsCv'].forEach(attachHover);
 
+// ---- batch completion (broker PERF from journal) ----
+const PERF=DATA.perf||{batches:[],per_tier:{},overall:{},tiers:[]};
+function makeSortable(tbl){
+  const heads=tbl.querySelectorAll('th');
+  heads.forEach((th,ci)=>{let dir=1;
+    th.addEventListener('click',()=>{
+      const tb=tbl.querySelector('tbody');
+      const rows=[...tb.querySelectorAll('tr')];
+      rows.sort((a,b)=>{
+        const x=a.children[ci].textContent.trim(), y=b.children[ci].textContent.trim();
+        const nx=parseFloat(x.replace(/[^0-9.\-]/g,'')), ny=parseFloat(y.replace(/[^0-9.\-]/g,''));
+        const num=!isNaN(nx)&&!isNaN(ny);
+        return dir*(num? nx-ny : (x<y?-1:x>y?1:0));
+      });
+      dir*=-1; rows.forEach(r=>tb.appendChild(r));
+    });
+  });
+}
+{
+  const ov=PERF.overall||{};
+  document.getElementById('perfOverall').textContent = ov.batches
+    ? (ov.batches+' batches · avg '+(ov.total_avg||0).toFixed(2)+'s total (mode '
+       +(ov.total_mode||0).toFixed(1)+'s · max '+(ov.total_max||0).toFixed(2)+'s) · avg '
+       +(ov.upload_avg||0).toFixed(2)+'s upload · '+fmt(ov.files||0)+' files · '+dsize(ov.bytes||0)
+       +(ov.rc_fail?(' · '+ov.rc_fail+' rc≠0'):' · all rc=0'))
+    : 'no PERF batch data captured from the journal';
+  const pg=document.getElementById('perfGroups');
+  (PERF.tiers||[]).forEach(t=>{
+    const s=PERF.per_tier[t];
+    const rows=(PERF.batches||[]).filter(b=>b.tier===t).map(b=>
+      '<tr class="'+(b.rc!==0?'bad':'')+'"><td>'+b.batch+'</td><td>'+fmt(b.files)+'</td><td>'
+      +dsize(b.bytes)+'</td><td>'+b.upload.toFixed(2)+'</td><td>'+b.total.toFixed(2)+'</td>'
+      +'<td class="'+(b.rc!==0?'bad':'ok')+'">'+b.rc+'</td></tr>').join('');
+    const det=document.createElement('details');
+    det.innerHTML='<summary><i class="dot" style="background:'+(COL[t]||'#888')+'"></i> <b>'+t+'</b>'
+      +' — '+s.batches+' batches · avg '+s.total_avg.toFixed(2)+'s · min '+s.total_min.toFixed(2)
+      +'s · max '+s.total_max.toFixed(2)+'s · mode '+s.total_mode.toFixed(1)+'s'
+      +(s.rc_fail?(' · <span class="bad">'+s.rc_fail+' rc≠0</span>'):'')+'</summary>'
+      +'<table><thead><tr><th>Batch</th><th>Files</th><th>Size</th><th>Upload s</th>'
+      +'<th>Total s</th><th>rc</th></tr></thead><tbody>'+rows+'</tbody></table>';
+    pg.appendChild(det);
+  });
+  pg.querySelectorAll('table').forEach(makeSortable);
+}
+function drawPerfBars(){
+  const cv=document.getElementById('perfBarsCv'); const {c,w,h}=prep(cv); clear(c,w,h);
+  HITS.perfBarsCv={w,h,regions:[]};
+  const tiers=PERF.tiers||[]; const pad=40; axis(c,w,h,pad);
+  if(!tiers.length){c.fillStyle='#8b949e';c.fillText('no PERF data',20,30);return;}
+  const maxV=Math.max(0.1,...tiers.map(t=>PERF.per_tier[t].total_max));
+  const Y=v=>(h-pad-8)-(h-pad-20)*(v/maxV);
+  const bw=(w-pad-10)/tiers.length; c.font='11px sans-serif';
+  tiers.forEach((t,i)=>{const s=PERF.per_tier[t];const x=pad+i*bw+bw*0.2;const bwidth=bw*0.6;
+    const yTop=Y(s.total_avg);
+    c.fillStyle=COL[t]||'#888';c.fillRect(x,yTop,bwidth,(h-pad)-yTop);
+    c.strokeStyle='#e6edf3';c.lineWidth=1.5;c.beginPath();
+    c.moveTo(x+bwidth/2,Y(s.total_min));c.lineTo(x+bwidth/2,Y(s.total_max));c.stroke();
+    c.fillStyle='#e6edf3';c.textAlign='center';c.fillText(s.total_avg.toFixed(1)+'s',x+bwidth/2,yTop-4);
+    c.fillStyle='#8b949e';c.fillText(t,x+bwidth/2,h-pad+12);
+    HITS.perfBarsCv.regions.push({type:'rect',x,y:8,w:bwidth,h:(h-pad)-8,
+      html:'<b>'+t+' completion</b>'+tipRows([
+        ['avg total',s.total_avg.toFixed(2)+' s'],['min',s.total_min.toFixed(2)+' s'],
+        ['max',s.total_max.toFixed(2)+' s'],['mode',s.total_mode.toFixed(1)+' s'],
+        ['avg upload',s.upload_avg.toFixed(2)+' s'],['batches',s.batches],
+        ['files',fmt(s.files)],['rc≠0',s.rc_fail]])});});
+  c.textAlign='left';c.fillStyle='#8b949e';c.fillText('avg total s/batch',pad,12);
+}
+function drawPerfHist(){
+  const cv=document.getElementById('perfHistCv'); const {c,w,h}=prep(cv); clear(c,w,h);
+  const B=PERF.batches||[]; const tiers=PERF.tiers||[]; const pad=40; axis(c,w,h,pad);
+  if(!B.length){c.fillStyle='#8b949e';c.fillText('no PERF data',20,30);return;}
+  const totals=B.map(b=>b.total); const lo=Math.min(...totals), hi=Math.max(...totals);
+  const nb=Math.min(24,Math.max(6,B.length)); const width=((hi-lo)/nb)||1;
+  const counts=Array.from({length:nb},()=>({}));
+  B.forEach(b=>{let idx=Math.min(nb-1,Math.floor((b.total-lo)/width)); if(idx<0)idx=0;
+    counts[idx][b.tier]=(counts[idx][b.tier]||0)+1;});
+  const totMax=Math.max(1,...counts.map(cn=>Object.values(cn).reduce((a,v)=>a+v,0)));
+  const bw=(w-pad-10)/nb;
+  counts.forEach((cn,i)=>{let yBase=h-pad; const x=pad+i*bw;
+    tiers.forEach(t=>{const v=cn[t]||0; if(!v)return; const bh=(h-pad-12)*(v/totMax);
+      c.fillStyle=COL[t]||'#888'; c.fillRect(x+1,yBase-bh,bw-1,bh); yBase-=bh;});});
+  c.fillStyle='#8b949e';c.font='11px sans-serif';c.textAlign='left';
+  c.fillText('peak '+totMax+' /bin',pad+4,14); c.fillText(lo.toFixed(0)+'s',pad,h-pad+14);
+  c.textAlign='right';c.fillText(hi.toFixed(0)+'s',w-8,h-pad+14);
+}
+function drawPerfScatter(){
+  const cv=document.getElementById('perfScatterCv'); const {c,w,h}=prep(cv); clear(c,w,h);
+  HITS.perfScatterCv={w,h,regions:[]};
+  const B=PERF.batches||[]; const pad=46; axis(c,w,h,pad);
+  if(!B.length){c.fillStyle='#8b949e';c.fillText('no PERF data',20,30);return;}
+  const n=B.length; const vMax=Math.max(1,...B.map(b=>b.total));
+  const X=i=>pad+(w-pad-12)*(n>1? i/(n-1):0);
+  const Y=v=>(h-pad-8)-(h-pad-20)*(v/vMax);
+  c.font='10px sans-serif';c.textAlign='right';
+  for(let k=0;k<=4;k++){const vv=vMax*k/4;const yy=Y(vv);
+    c.strokeStyle='#20262d';c.beginPath();c.moveTo(pad,yy);c.lineTo(w-6,yy);c.stroke();
+    c.fillStyle='#8b949e';c.fillText(vv.toFixed(0)+'s',pad-4,yy+3);}
+  B.forEach((b,i)=>{const x=X(i),y=Y(b.total);
+    c.fillStyle=COL[b.tier]||'#888';c.globalAlpha=0.85;
+    c.beginPath();c.arc(x,y,3.2,0,6.283);c.fill();c.globalAlpha=1;
+    if(b.rc!==0){c.strokeStyle='#f85149';c.lineWidth=1.6;c.beginPath();c.arc(x,y,5.4,0,6.283);c.stroke();}
+    HITS.perfScatterCv.regions.push({type:'circ',x,y,r:6,
+      html:'<b>'+b.tier+' · '+b.batch+'</b>'+tipRows([
+        ['total',b.total.toFixed(2)+' s'],['upload',b.upload.toFixed(2)+' s'],
+        ['files',fmt(b.files)],['size',dsize(b.bytes)],['rc',b.rc],['order','#'+(b.order+1)]])});});
+  c.fillStyle='#8b949e';c.textAlign='center';c.fillText('completion order →',w/2,h-pad+14);
+  c.textAlign='left';c.fillText('total s',pad-40,12);
+}
+['perfBarsCv','perfScatterCv'].forEach(attachHover);
+
 // ---- dataset structure & enumeration expectation ----
 const ST=DATA.structure||{levels:[],enumeration_order:[]};
 document.getElementById('structTotals').textContent =
@@ -1336,7 +1680,7 @@ document.getElementById('resetBtn').onclick=()=>{stop();idx=0;renderFrame(0);};
 document.getElementById('speed').onchange=()=>{if(playing)start();};
 scrub.oninput=e=>{stop();idx=parseInt(e.target.value,10);renderFrame(idx);};
 
-function redraw(){renderFrame(idx);drawTS();drawHist();drawThrScatter();drawThrBars();drawElapBars();}
+function redraw(){renderFrame(idx);drawTS();drawHist();drawThrScatter();drawThrBars();drawElapBars();drawPerfBars();drawPerfHist();drawPerfScatter();}
 window.addEventListener('resize',redraw);
 redraw();
 </script>
@@ -1421,6 +1765,8 @@ def run_one(dataset: dict, args, spec_dir: Path, batch_cfg: dict, tier_order: li
     tier_sizes = [((lv.get("tier") or "").lower(), int(lv.get("size_bytes", 0) or 0))
                   for lv in dataset.get("levels", [])]
     throughput = parse_cloudcp_log(report_dir / "cloudcplogs.txt", tier_order, tier_sizes)
+    # 6c. batch completion from the broker's journal PERF lines
+    perf = parse_perf_log(cap.perf_path, tier_order)
     # 6. results csv
     csv_dst = report_dir / f"transfer_report_{tr_id}.csv"
     csv_summary: dict = {"total": 0, "status_counts": {}, "success": 0, "failed": 0,
@@ -1453,10 +1799,10 @@ def run_one(dataset: dict, args, spec_dir: Path, batch_cfg: dict, tier_order: li
     # 7. html + summary
     structure = build_structure_payload(dataset)
     payload = build_report_payload(dataset, tr_id, enum_payload, cap_data, csv_summary,
-                                   meta, batch_cfg, tier_order, structure, throughput)
+                                   meta, batch_cfg, tier_order, structure, throughput, perf)
     render_html(payload, report_dir / "report.html")
     write_summary_txt(report_dir / "summary.txt", meta, enum_payload, cap_data, csv_summary,
-                      structure, throughput)
+                      structure, throughput, perf)
 
     # 9. zip
     zip_path = out_root / f"sch_test_{tr_id}.zip"
@@ -1479,7 +1825,7 @@ def run_one(dataset: dict, args, spec_dir: Path, batch_cfg: dict, tier_order: li
 
 
 def write_summary_txt(path: Path, meta, enum_payload, cap_data, csv_summary, structure,
-                      throughput=None) -> None:
+                      throughput=None, perf=None) -> None:
     def _bytes(n: int) -> str:
         x = float(n)
         for u in ("B", "KB", "MB", "GB", "TB"):
@@ -1568,6 +1914,31 @@ def write_summary_txt(path: Path, meta, enum_payload, cap_data, csv_summary, str
                 f"  {'ALL':<6} batches={ov['batches']:>3}  "
                 f"min={ov['elapsed_min']:>7.2f}s  avg={ov['elapsed_avg']:>7.2f}s  "
                 f"med={ov['elapsed_median']:>7.2f}s  max={ov['elapsed_max']:>7.2f}s"
+            )
+    pf = perf or {}
+    if pf.get("per_tier"):
+        lines += [
+            "",
+            "Batch completion — broker PERF (journal), total time per batch:",
+            "  (total = full batch time; upload = upload phase; mode on 0.1s-rounded totals)",
+        ]
+        for tier in pf.get("tiers", []):
+            s = pf["per_tier"][tier]
+            rc = f"  rc!=0={s['rc_fail']}" if s["rc_fail"] else ""
+            lines.append(
+                f"  {tier:<6} batches={s['batches']:>3}  files={s['files']:>7}  "
+                f"min={s['total_min']:>7.2f}s  avg={s['total_avg']:>7.2f}s  "
+                f"max={s['total_max']:>7.2f}s  mode={s['total_mode']:>6.1f}s  "
+                f"upl_avg={s['upload_avg']:>7.2f}s{rc}"
+            )
+        ov = pf.get("overall", {})
+        if ov:
+            rc = f"  rc!=0={ov['rc_fail']}" if ov["rc_fail"] else ""
+            lines.append(
+                f"  {'ALL':<6} batches={ov['batches']:>3}  files={ov['files']:>7}  "
+                f"min={ov['total_min']:>7.2f}s  avg={ov['total_avg']:>7.2f}s  "
+                f"max={ov['total_max']:>7.2f}s  mode={ov['total_mode']:>6.1f}s  "
+                f"upl_avg={ov['upload_avg']:>7.2f}s{rc}"
             )
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
@@ -1672,8 +2043,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     ap.add_argument("--scheduler-python", default=DEF_SCHED_PY)
     ap.add_argument("--scheduler-script", default=DEF_SCHED_SCRIPT)
     ap.add_argument("--dir-path", default=DEF_DIR_PATH)
-    ap.add_argument("--endpoint-url", default=DEF_ENDPOINT)
+    ap.add_argument("--endpoint-url", dest="endpoint_url", default=None,
+                    help=f"S3/MinIO endpoint (default: {DEF_ENDPOINT})")
     ap.add_argument("--config", default=DEF_CONFIG, help="config.json for BATCH tiers")
+    ap.add_argument("--skip-config-check", dest="skip_config_check", action="store_true",
+                    help="skip the preflight datagen/config.json validation")
     ap.add_argument("--journal-tag", default=DEF_JOURNAL_TAG)
     ap.add_argument("--capture-lead", type=float, default=DEF_CAPTURE_LEAD,
                     help="seconds to settle the journalctl follower before the scheduler starts")
@@ -1703,6 +2077,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
 def main(argv: list[str]) -> int:
     args = parse_args(argv)
+    # resolve the endpoint sentinel and remember whether the user overrode it
+    args.endpoint_overridden = args.endpoint_url is not None
+    if args.endpoint_url is None:
+        args.endpoint_url = DEF_ENDPOINT
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
         format="%(asctime)s %(levelname)-7s %(message)s",
@@ -1718,6 +2096,9 @@ def main(argv: list[str]) -> int:
                 print(f"{c.id:<13} {c.group:<12} {c.title}{tag}")
             return 0
         return neg.run_from_args(args)
+
+    # host/config preflight before any transfer runs
+    preflight_checks(args)
 
     here = Path(__file__).resolve().parent
     spec_dir = Path(args.spec_dir) if args.spec_dir else here / "spec_files"
